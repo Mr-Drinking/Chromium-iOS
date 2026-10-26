@@ -1,0 +1,106 @@
+# category	path	covered_by	purpose
+core	content/browser/child_process_launcher_helper_ios.mm	0002	单进程下把 BrowserEngineKit 的图层交接置空（否则编不过）
+core	content/browser/renderer_host/media/media_devices_manager.cc	optional/0102	单进程下拦截摄像头/麦克风枚举，避免崩溃（Blinker 原版夹带大量 clang-format 格式化改动）
+core	content/browser/renderer_host/render_widget_host_view_ios.h	0002（DisplayCALayerTree 部分）	DisplayCALayerTree 成员；另有键盘/光标度量（依赖 shell，未移植）
+core	content/browser/renderer_host/render_widget_host_view_ios.mm	0002（DisplayCALayerTree 部分）	DisplayCALayerTree 接收 CALayerParams；另有点击立即派发、键盘避让（依赖 shell，未移植）
+core	content/gpu/in_process_gpu_thread.cc	0003（改为不依赖 shell 的写法）	进程内 GPU 线程启动前确保 ANGLE 拿到 Metal 设备（原本由 shell 提供钩子）
+core	gpu/ipc/service/image_transport_surface_overlay_mac.mm	0002（进程内挂图层部分）	GPU 线程把根 CALayer 直接挂到网页视图上（替代 BELayerHierarchy 跨进程交接）
+core	media/capture/video/apple/video_capture_device_avfoundation.mm	optional/0102	单进程下禁用媒体采集，直接返回拒绝
+core	ui/accelerated_widget_mac/BUILD.gn	0002	把 tvOS 专用的进程内图层树（display_ca_layer_tree）也编进 iPhone 版
+core	ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h	0002	网页视图改为普通 UIView（tvOS 写法），不再继承 BrowserEngineKit 的跨进程图层宿主
+core	ui/accelerated_widget_mac/ca_layer_frame_sink_provider.mm	0002	进程内直接挂上 GPU 渲染出的 CALayer，并随旋转/布局保持铺满
+core	ui/gl/init/gl_factory_ios.mm	optional/0101	EGL 初始化失败时的兜底，避免 GL 实现为空导致不出画面
+noop	components/viz/service/display/overlay_processor_interface.cc	无需移植（只加了注释）	只加了一段注释，没有功能改动
+memory	base/allocator/partition_allocator/partition_alloc.gni		地址空间不够时用更小的内存池（新增 GN 开关）
+memory	base/allocator/partition_allocator/src/partition_alloc/BUILD.gn		把上面的开关传给 PartitionAlloc
+memory	base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc		extended-virtual-addressing 不生效时强制小内存池
+memory	base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h		小内存池的容量定义
+memory	gin/v8_platform_page_allocator.cc		不用 MAP_JIT 方式保留地址空间（TrollStore 环境会被拒）
+memory	storage/browser/blob/blob_builder_from_stream.cc		大文件上传超过阈值就写盘，防止单进程内存爆掉
+memory	third_party/blink/renderer/platform/media/multi_buffer_data_source.cc		限制媒体缓冲占用，防止被系统 jetsam 杀掉
+memory	v8/src/base/platform/platform-posix.cc		大块保留内存不带 MAP_NORESERVE（越狱设备上内核会拒绝）
+memory	v8/src/heap/code-range.cc		代码区保留失败时逐级缩小重试
+wasm	v8/src/wasm/interpreter/wasm-interpreter-runtime-inl.h		DrumBrake 小修
+wasm	v8/src/wasm/interpreter/wasm-interpreter.cc		DrumBrake 小修
+wasm	v8/src/wasm/wasm-js.cc		免 JIT 模式下让 Wasm 走 DrumBrake 解释器
+jit	v8/src/common/code-memory-access-inl.h		JIT：代码区 RX 映射 + RW 镜像写入
+jit	v8/src/common/code-memory-access.cc		JIT：RW 镜像的建立与 mprotect 兜底
+jit	v8/src/common/code-memory-access.h		JIT：镜像接口
+jit	v8/src/common/globals.h		JIT：iOS W^X 开关
+jit	v8/src/heap/memory-allocator.cc		JIT：可执行内存块头部经镜像写入
+jit	v8/src/heap/mutable-page-inl.h		JIT：GC 标记经镜像写入
+jit	v8/src/heap/mutable-page.h		JIT：代码页按 RX 而不是 RWX 分配
+jit	v8/src/heap/sweeper.cc		JIT：清扫时经镜像清零
+jit	v8/src/wasm/wasm-code-manager.cc		JIT：Wasm 代码页按 RX 提交，经镜像写入
+fix	components/input/web_input_event_builders_ios.h		触摸表修正（声明）
+fix	components/input/web_input_event_builders_ios.mm		触摸点"卡死"导致之后所有触摸失效的问题
+fix	media/audio/ios/audio_session_manager_ios.mm		音频输出路由（扬声器/耳机/蓝牙）修正
+fix	third_party/blink/renderer/platform/media/web_media_player_impl.cc		旋转后全屏视频不出帧的修正
+fix	ui/accelerated_widget_mac/ca_renderer_layer_tree.mm	暂未移植；0001 用 --disable-features=avfoundation-overlays 绕开	进程内图层树的视频层 flush、画中画等修正
+fix	ui/display/ios/screen_ios.mm		横屏时 screen.width/height 方向错误的修正
+fix	ui/shell_dialogs/BUILD.gn		文件选择器增强（构建）
+fix	ui/shell_dialogs/select_file_dialog.h		文件选择器保留 accept/capture 信息
+fix	ui/shell_dialogs/select_file_dialog_ios.mm		文件选择按类型打开相册/相机/文件
+legacy	base/BUILD.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	base/allocator/partition_allocator/src/partition_alloc/spinning_mutex.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	base/apple/owned_objc_types.h		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	base/message_loop/message_pump_kqueue.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	build/config/BUILDCONFIG.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	components/input/native_web_keyboard_event_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	components/metal_util/hdr_copier_layer.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/BUILD.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/date_time_chooser/ios/date_time_chooser_coordinator.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/date_time_chooser/ios/date_time_chooser_view_controller.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/renderer_host/ios_extended_text_input_traits.h		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/renderer_host/ios_extended_text_input_traits.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/renderer_host/render_widget_host_view_ios_uiview.h		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/renderer_host/render_widget_host_view_ios_uiview.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	content/browser/renderer_host/web_menu_runner_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	crypto/BUILD.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	crypto/apple/unexportable_key_apple.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	device/bluetooth/bluetooth_low_energy_adapter_apple.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	device/gamepad/game_controller_gamepad.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ios/build/chrome_build.gni		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	media/audio/BUILD.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	media/base/mac/color_space_util_mac.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	media/base/mac/video_frame_mac.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	media/capture/video/apple/video_capture_device_factory_apple.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	media/gpu/mac/vt_video_encode_accelerator_mac.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	mojo/core/channel_mac.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	mojo/core/ipcz_driver/wrapped_platform_handle.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	net/base/network_change_notifier_apple.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	net/base/platform_mime_util_apple.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	net/cert/cert_verify_proc_ios.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	services/device/public/cpp/geolocation/location_manager_delegate.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	services/webnn/BUILD.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	services/webnn/webnn_context_provider_impl.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	skia/ext/skia_utils_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	skia/ext/skia_utils_mac.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	third_party/angle/src/libANGLE/renderer/metal/DisplayMtl.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	third_party/angle/src/libANGLE/renderer/metal/mtl_utils.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	third_party/blink/renderer/modules/nfc/BUILD.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	third_party/blink/renderer/modules/nfc/nfc_parser_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	third_party/blink/renderer/platform/mac/graphics_context_canvas.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	third_party/crashpad/crashpad/client/crash_handler_ios.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	third_party/crashpad/crashpad/util/mach/exc_server_variants.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/accessibility/platform/BUILD.gn		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/base/clipboard/clipboard_format_type_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/base/resource/resource_bundle_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/events/devices/input_device_observer_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/events/keycodes/keyboard_code_conversion_ios.h		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/events/keycodes/keyboard_code_conversion_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/gfx/image/image_ios.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/gfx/mac/color_space_util.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/gfx/mac/io_surface.cc		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/gfx/mac/mtl_shared_event_fence.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+legacy	ui/gl/gl_display_egl.mm		只为 iOS 12–17 / Xcode 15 SDK 做的兼容
+diag	content/browser/renderer_host/browser_compositor_ios.mm		诊断日志/计数器
+diag	gin/isolate_holder.cc		诊断日志/计数器
+diag	ui/compositor/compositor.cc		诊断日志/计数器
+test	base/test/test_support_ios.mm		测试代码的编译修正
+test	content/test/BUILD.gn		测试代码的编译修正
+test	ios/chrome/browser/snapshots/model/image_file_manager_unittest.mm		测试代码的编译修正
+test	services/shape_detection/text_detection_impl_mac_unittest.mm		测试代码的编译修正
+test	ui/gfx/image/image_ios_unittest.mm		测试代码的编译修正
+test	ui/gfx/image/image_unittest_util_apple.mm		测试代码的编译修正
+test	ui/webui/BUILD.gn		测试代码的编译修正

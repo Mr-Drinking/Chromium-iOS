@@ -1,0 +1,7 @@
+# Applied in order by scripts/02-apply-patches.sh (git am --3way).
+0001-ios-sideload-single-process-jitless-switches.patch
+0002-ios-sideload-in-process-calayer-display.patch
+0003-ios-sideload-wait-for-metal-device.patch
+# Optional; applied only with --with-optional, or uncomment to make default.
+# optional/0101-gl-init-failure-without-abort.patch
+# optional/0102-disable-media-capture.patch

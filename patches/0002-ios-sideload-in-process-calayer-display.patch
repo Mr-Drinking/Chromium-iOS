@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Subject: [PATCH] iOS sideload: display GPU output in-process without BELayerHierarchy
+
+Upstream iOS shows GPU output by wrapping the GPU's root CALayer in a
+BELayerHierarchy, sending its XPC handle to the browser process and hosting
+it in a BELayerHierarchyHostingView. All of that needs BrowserEngineKit
+entitlements. In a single-process build the GPU thread and the browser UI
+share one address space, so:
+
+- CALayerFrameSinkProvider is a plain UIView on iOS (as on tvOS) with
+  -attachContentLayer:, which adds the GPU's root layer as a sublayer and
+  keeps it sized to the view.
+- ImageTransportSurfaceOverlayMacEGL looks the provider up by surface handle
+  and attaches the root layer on the main queue instead of creating a
+  BELayerHierarchy.
+- RenderWidgetHostViewIOS displays CALayerParams through DisplayCALayerTree,
+  which is now built for iPhone too.
+- The never-taken multi-process handoff in ChildProcessLauncherHelper no
+  longer touches the removed BELayerHierarchyHostingView |handle|.
+
+The approach, and the -attachContentLayer: name, follow Blinker Fluid
+(github.com/Nodesclock/Blinker-Fluid, GPL-3.0); reimplemented here against the
+pinned revision as a minimal change.
+
+Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
+applies with git am --3way. Verify on a Mac before trusting it.
+---
+diff --git a/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h b/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h
+index 27153aecc39db243b011b27cd0e1f5d0101a10b4..b64929b454023d3b468e1caa98d440a2a262e5ba 100644
+--- a/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h
++++ b/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h
+@@ -18,15 +18,19 @@ namespace ui {
+ class CALayerFrameSink;
+ }
+ 
+-#if !BUILDFLAG(IS_IOS_TVOS)
+-@interface CALayerFrameSinkProvider : BELayerHierarchyHostingView
+-#else
++// [ios-blink-sideload] Upstream iOS hosts the GPU process's layer tree through
++// BELayerHierarchyHostingView, which needs BrowserEngineKit entitlements that a
++// sideloaded app cannot have. This build is single-process, so the provider is
++// a plain UIView (as on tvOS) and the GPU thread attaches its root CALayer
++// directly with -attachContentLayer:.
+ @interface CALayerFrameSinkProvider : UIView
+-#endif
+ 
+ - (id)init;
+ - (ui::CALayerFrameSink*)frameSink;
+ - (gfx::AcceleratedWidget)viewHandle;
++// Makes |layer| the on-screen content of this view and keeps it sized to the
++// view's bounds. Passing nil detaches the current layer. Main thread only.
++- (void)attachContentLayer:(CALayer*)layer;
+ + (CALayerFrameSinkProvider*)lookupByHandle:(uint64_t)viewHandle;
+ @end
+ 
+diff --git a/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.mm b/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.mm
+index 432e90797d2d33b67bc06ed5c0280e8d5fbb9faf..82b766c913896f77767081755d5b1a6e7d58b9db 100644
+--- a/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.mm
++++ b/ui/accelerated_widget_mac/ca_layer_frame_sink_provider.mm
+@@ -4,6 +4,8 @@
+ 
+ #import "ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h"
+ 
++#import <QuartzCore/QuartzCore.h>
++
+ #include <map>
+ 
+ namespace {
+@@ -18,12 +20,42 @@ WidgetToSinkProviderMap() {
+ 
+ @implementation CALayerFrameSinkProvider {
+   uint64_t _view_handle;
++  // [ios-blink-sideload] Root layer of the in-process GPU's CALayer tree.
++  CALayer* __strong _contentLayer;
+ }
+ 
+ - (ui::CALayerFrameSink*)frameSink {
+   return nil;
+ }
+ 
++- (void)attachContentLayer:(CALayer*)layer {
++  if (_contentLayer == layer) {
++    return;
++  }
++  [CATransaction begin];
++  [CATransaction setDisableActions:YES];
++  [_contentLayer removeFromSuperlayer];
++  _contentLayer = layer;
++  if (_contentLayer) {
++    _contentLayer.anchorPoint = CGPointZero;
++    _contentLayer.frame = self.layer.bounds;
++    [self.layer addSublayer:_contentLayer];
++  }
++  [CATransaction commit];
++}
++
++- (void)layoutSubviews {
++  [super layoutSubviews];
++  if (!_contentLayer) {
++    return;
++  }
++  // Keep the GPU's layer covering the view across rotation and resizes.
++  [CATransaction begin];
++  [CATransaction setDisableActions:YES];
++  _contentLayer.frame = self.layer.bounds;
++  [CATransaction commit];
++}
++
+ - (gfx::AcceleratedWidget)viewHandle {
+   return _view_handle;
+ }
+diff --git a/ui/accelerated_widget_mac/BUILD.gn b/ui/accelerated_widget_mac/BUILD.gn
+index eb90cda4852ca7dc0932cc77801f6b4d62c5624d..275e5ae8197f8a2ed84133bcc87b8c44cf469849 100644
+--- a/ui/accelerated_widget_mac/BUILD.gn
++++ b/ui/accelerated_widget_mac/BUILD.gn
+@@ -65,7 +65,9 @@ component("accelerated_widget_mac") {
+     configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+   }
+ 
+-  if (is_mac || (is_ios && target_platform != "iphoneos")) {
++  # [ios-blink-sideload] The single-process iPhone build displays browser-side
++  # CALayerParams the same way tvOS does.
++  if (is_mac || is_ios) {
+     sources += [
+       "display_ca_layer_tree.h",
+       "display_ca_layer_tree.mm",
+diff --git a/gpu/ipc/service/image_transport_surface_overlay_mac.mm b/gpu/ipc/service/image_transport_surface_overlay_mac.mm
+index c02ab8e9b6d2eccac16090828a694ff08de7d7fc..3e42c66d8c446ec8c3e2559e77aa4ddb44f874f2 100644
+--- a/gpu/ipc/service/image_transport_surface_overlay_mac.mm
++++ b/gpu/ipc/service/image_transport_surface_overlay_mac.mm
+@@ -33,6 +33,7 @@
+ 
+ #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
+ #include "gpu/ipc/common/ios/be_layer_hierarchy_transport.h"
++#import "ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h"
+ #endif
+ 
+ #if BUILDFLAG(SKIA_USE_DAWN)
+@@ -126,22 +127,19 @@ ImageTransportSurfaceOverlayMacEGL::ImageTransportSurfaceOverlayMacEGL(
+       std::move(gl_make_current_callback), GetMTLDevice(context_state));
+ 
+ #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
+-  // The BELayerHierarchy needs to be created on a thread that supports
+-  // libdispatch, so we proxy over to the main dispatch queue to do that.
++  // [ios-blink-sideload] Upstream wraps the root layer in a BELayerHierarchy
++  // and ships it to the browser process over XPC, which needs BrowserEngineKit
++  // entitlements. This build is single-process: the GPU thread and the browser
++  // UI share one address space, so hand the root layer straight to the
++  // on-screen view that owns |surface_handle|. UIKit must be touched on the
++  // main thread; async avoids blocking GPU init on a busy main thread.
+   CALayer* root_ca_layer = ca_layer_tree_coordinator_->root_ca_layer();
+-  __block xpc_object_t ipc_representation;
+-  dispatch_sync(dispatch_get_main_queue(), ^{
+-    NSError* error = nullptr;
+-    layer_hierarchy_ = [BELayerHierarchy layerHierarchyWithError:&error];
+-    layer_hierarchy_.layer = root_ca_layer;
+-    ipc_representation = [layer_hierarchy_.handle createXPCRepresentation];
++  const uint64_t view_handle = static_cast<uint64_t>(surface_handle);
++  dispatch_async(dispatch_get_main_queue(), ^{
++    CALayerFrameSinkProvider* provider =
++        [CALayerFrameSinkProvider lookupByHandle:view_handle];
++    [provider attachContentLayer:root_ca_layer];
+   });
+-
+-  BELayerHierarchyTransport* transport =
+-      BELayerHierarchyTransport::GetInstance();
+-  CHECK(transport);
+-  transport->ForwardBELayerHierarchyToBrowser(surface_handle,
+-                                              ipc_representation);
+ #endif
+ }
+ 
+diff --git a/content/browser/child_process_launcher_helper_ios.mm b/content/browser/child_process_launcher_helper_ios.mm
+index de727af5fa2b0e3d251d903fd3c281cb0c57d3e1..52a120711e35608115eb675375dc3cfda0e67325 100644
+--- a/content/browser/child_process_launcher_helper_ios.mm
++++ b/content/browser/child_process_launcher_helper_ios.mm
+@@ -337,11 +337,12 @@ void ChildProcessLauncherHelper::OnChildProcessStarted(
+                     BELayerHierarchyHandle* be_handle = [BELayerHierarchyHandle
+                         handleWithXPCRepresentation:ca_layer_handle
+                                               error:&error];
+-                    CALayerFrameSinkProvider* sink =
+-                        [CALayerFrameSinkProvider lookupByHandle:view_handle];
+-                    if (sink) {
+-                      sink.handle = be_handle;
+-                    }
++                    // [ios-blink-sideload] CALayerFrameSinkProvider is a plain
++                    // UIView in this build (no BELayerHierarchyHostingView, so
++                    // no |handle|). The GPU runs in-process and attaches its
++                    // layer directly, so this multi-process handoff never runs.
++                    (void)be_handle;
++                    (void)view_handle;
+                   },
+                   view_handle, ca_layer_handle));
+         }
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
+index 8c4a7729f69052ad099c9bd023a192d9a6292b5a..6d897123a60ead3f9940984d237369b044aab8e2 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios.h
+@@ -5,6 +5,7 @@
+ #ifndef CONTENT_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_IOS_H_
+ #define CONTENT_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_IOS_H_
+ 
++#include <memory>
+ #include <optional>
+ #include <string>
+ #include <vector>
+@@ -25,6 +26,7 @@
+ #include "ui/events/gesture_detection/filtered_gesture_provider.h"
+ 
+ namespace ui {
++class DisplayCALayerTree;
+ enum class DomCode : uint32_t;
+ }  // namespace ui
+ 
+@@ -305,6 +307,9 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+ 
+   std::unique_ptr<BrowserCompositorIOS> browser_compositor_;
+   std::unique_ptr<UIViewHolder> ui_view_;
++  // [ios-blink-sideload] Displays CALayerParams delivered to
++  // UpdateCALayerTree() on the view's own layer, as the tvOS port does.
++  std::unique_ptr<ui::DisplayCALayerTree> display_tree_;
+   base::WeakPtrFactory<RenderWidgetHostViewIOS> weak_factory_{this};
+ };
+ 
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index d9d1c86c2ff2bbfad5bac1130942ecfac8d632e1..f73a1ed2feacce484f5c412833a0033045228280 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -104,6 +104,8 @@ RenderWidgetHostViewIOS::RenderWidgetHostViewIOS(RenderWidgetHost* widget)
+   ui_view_ = std::make_unique<UIViewHolder>();
+   ui_view_->view_ =
+       [[RenderWidgetUIView alloc] initWithWidget:weak_factory_.GetWeakPtr()];
++  display_tree_ =
++      std::make_unique<ui::DisplayCALayerTree>([ui_view_->view_ layer]);
+ 
+   auto* screen = display::Screen::Get();
+   screen_infos_ =
+@@ -492,7 +494,11 @@ void RenderWidgetHostViewIOS::OnSynchronizedDisplayPropertiesChanged(
+ }
+ 
+ void RenderWidgetHostViewIOS::UpdateCALayerTree(
+-    gfx::CALayerParams ca_layer_params) {}
++    gfx::CALayerParams ca_layer_params) {
++  // [ios-blink-sideload] Upstream relies on BELayerHierarchy and ignores these
++  // params; single-process builds display them like tvOS.
++  display_tree_->UpdateCALayerTree(std::move(ca_layer_params));
++}
+ 
+ void RenderWidgetHostViewIOS::OnOldViewDidNavigatePreCommit() {
+   CHECK(browser_compositor_) << "Shouldn't be called during destruction!";
+-- 
+ios-blink-sideload

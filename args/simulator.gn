@@ -1,0 +1,38 @@
+# Chromium for the iOS Simulator with the Blink engine.
+#
+# Based on the official iOS Blink CI builder at the pinned revision
+# (infra/config/generated/builders/ci/ios-blink-rel-fyi/gn-args.json @ d586be9f),
+# minus Google's remote execution. scripts/03-build.sh copies this file to
+# <out>/args.gn and replaces @BUNDLE_ID_PREFIX@.
+
+target_os = "ios"
+target_cpu = "arm64"
+target_environment = "simulator"
+use_blink = true
+
+is_debug = false
+is_component_build = false
+dcheck_always_on = true
+symbol_level = 1
+
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+ios_app_bundle_id_prefix = "@BUNDLE_ID_PREFIX@"
+
+# Chrome's own app extensions: not needed, and each would need its own App ID
+# when sideloading. Kept identical to device.gn so the simulator matches.
+ios_enable_share_extension = false
+ios_enable_extended_share_extension = false
+ios_enable_open_extension = false
+ios_enable_credential_provider_extension = false
+ios_enable_intents_extension = false
+ios_enable_widget_kit_extension = false
+ios_enable_lockscreen_widget = false
+ios_enable_push_notification_service_extension = false
+
+# Same V8/Oilpan configuration as the device build (see device.gn), so the
+# simulator exercises the jitless code paths the phone will run.
+v8_enable_sandbox = false
+cppgc_enable_caged_heap = false
+v8_enable_drumbrake = true

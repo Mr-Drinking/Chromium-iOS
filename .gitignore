@@ -1,0 +1,6 @@
+# Build products and downloads never belong in this repo.
+out/
+dist/
+*.ipa
+__pycache__/
+.DS_Store

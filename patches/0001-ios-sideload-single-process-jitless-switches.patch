@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Subject: [PATCH] iOS sideload: run single-process and jitless by default
+
+A sideloaded app cannot hold the BrowserEngineKit entitlements, so the web
+content, GPU and network extension processes can never be launched and V8
+cannot allocate executable memory. Mirror the tvOS port's default in
+RunContentProcess(): append --single-process on iOS (non-tvOS), make V8
+jitless with RAM-scaled heap limits, disable the GPU watchdog, cap the GPU
+memory estimate, enable WebContentsDiscard and disable AVFoundation overlays
+and the back/forward cache.
+
+Applies to every content embedder (content_shell and the Chrome app).
+
+Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
+applies with git am --3way. Verify on a Mac before trusting it.
+---
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 0fd60fa820805069ff01a2442f14de2b5e984e5a..edb9525348ca44e758d3f6f7547bf474efe13eaa 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -27,6 +27,7 @@
+ #include "base/run_loop.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/synchronization/condition_variable.h"
++#include "base/system/sys_info.h"
+ #include "base/task/single_thread_task_executor.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
+ #include "base/threading/platform_thread.h"
+@@ -113,6 +114,76 @@ void SetupSignalHandlers() {
+ 
+ #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+ 
++#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++// [ios-blink-sideload] Adds |features| to a comma-separated feature switch
++// without discarding values that are already present.
++void AppendToFeatureSwitch(base::CommandLine* command_line,
++                           const char* switch_name,
++                           const std::string& features) {
++  std::string value = command_line->GetSwitchValueASCII(switch_name);
++  if (!value.empty()) {
++    value += ",";
++  }
++  value += features;
++  command_line->AppendSwitchASCII(switch_name, value);
++}
++
++// [ios-blink-sideload] A sideloaded app cannot hold the BrowserEngineKit
++// entitlements, so the web content, GPU and network extension processes can
++// never be launched and V8 cannot allocate executable memory. Run the way the
++// tvOS port does: everything in one process, V8 jitless, and memory budgets
++// sized for a single shared process.
++void AppendSideloadSwitches(base::CommandLine* command_line) {
++  // blink::switches::kJavaScriptFlags; spelled out to keep content/app free of
++  // a direct Blink dependency.
++  constexpr char kJsFlagsSwitch[] = "js-flags";
++
++  command_line->AppendSwitch(switches::kSingleProcess);
++
++  const uint64_t ram_mb =
++      base::SysInfo::AmountOfTotalPhysicalMemory().InMiB();
++
++  if (!command_line->HasSwitch(kJsFlagsSwitch)) {
++    // Heap ceilings by device RAM (taken from Blinker Fluid's on-device
++    // tuning). A 4 GB device such as the iPhone 13 mini gets 384/16 MB.
++    int old_space_mb = 256;
++    int semi_space_mb = 8;
++    if (ram_mb >= 5500) {
++      old_space_mb = 512;
++      semi_space_mb = 16;
++    } else if (ram_mb >= 3500) {
++      old_space_mb = 384;
++      semi_space_mb = 16;
++    }
++    command_line->AppendSwitchASCII(
++        kJsFlagsSwitch,
++        "--jitless --wasm-jitless --max-old-space-size=" +
++            base::NumberToString(old_space_mb) +
++            " --max-semi-space-size=" + base::NumberToString(semi_space_mb));
++  }
++
++  // In-process, the GPU watchdog killing a slow GPU thread takes the whole app
++  // down; a slow first GL/ANGLE init is expected here.
++  command_line->AppendSwitch("disable-gpu-watchdog");
++
++  // Cap the compositor's estimate of available GPU memory so tile caches on
++  // heavy pages do not push the single process over the jetsam limit.
++  if (!command_line->HasSwitch("force-gpu-mem-available-mb")) {
++    command_line->AppendSwitchASCII(
++        "force-gpu-mem-available-mb",
++        ram_mb >= 5500 ? "512" : (ram_mb >= 3500 ? "384" : "192"));
++  }
++
++  AppendToFeatureSwitch(command_line, switches::kEnableFeatures,
++                        "WebContentsDiscard");
++  // AVSampleBufferDisplayLayer video needs extra fixes before it draws through
++  // the in-process layer tree (see docs/patch-triage.md), and the
++  // back/forward cache keeps whole pages alive inside the one process.
++  AppendToFeatureSwitch(command_line, switches::kDisableFeatures,
++                        "avfoundation-overlays,BackForwardCache");
++}
++#endif  // BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++
+ bool IsSubprocess() {
+   auto type = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+       switches::kProcessType);
+@@ -300,6 +371,9 @@ NO_STACK_PROTECTOR int RunContentProcess(
+     // Enable spatial navigation; we interpret remote control swipes as arrow
+     // keys.
+     command_line->AppendSwitch(switches::kEnableSpatialNavigation);
++#else
++    // [ios-blink-sideload] Single-process, jitless defaults for sideloading.
++    AppendSideloadSwitches(command_line);
+ #endif
+ #endif
+ 
+-- 
+ios-blink-sideload

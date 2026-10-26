@@ -1,0 +1,42 @@
+# Chromium for a physical iPhone (arm64, iOS 26+), Blink engine, unsigned, for
+# sideloading. scripts/03-build.sh copies this file to <out>/args.gn and
+# replaces @BUNDLE_ID_PREFIX@.
+
+target_os = "ios"
+target_cpu = "arm64"
+target_environment = "device"
+use_blink = true
+
+is_debug = false
+is_component_build = false
+dcheck_always_on = false
+# Line tables keep crash reports symbolizable; set 0 for a smaller build.
+symbol_level = 1
+
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+# Produce an unsigned Chromium.app; SideStore / AltStore / Sideloadly sign it
+# with your Apple ID at install time (scripts/05-package-ipa.sh makes the IPA).
+ios_enable_code_signing = false
+ios_app_bundle_id_prefix = "@BUNDLE_ID_PREFIX@"
+
+# Chrome's own app extensions: not needed, and each would need its own App ID.
+ios_enable_share_extension = false
+ios_enable_extended_share_extension = false
+ios_enable_open_extension = false
+ios_enable_credential_provider_extension = false
+ios_enable_intents_extension = false
+ios_enable_widget_kit_extension = false
+ios_enable_lockscreen_widget = false
+ios_enable_push_notification_service_extension = false
+
+# A sideloaded app may not be granted extended virtual addressing, so avoid
+# V8's sandbox reservation and Oilpan's caged heap (both reserve very large
+# address ranges). These are the settings Blinker Fluid ships on real devices.
+v8_enable_sandbox = false
+cppgc_enable_caged_heap = false
+
+# No JIT without BrowserEngineKit (patch 0001 passes --jitless); DrumBrake is
+# V8's WebAssembly interpreter, which is what the tvOS port uses for Wasm.
+v8_enable_drumbrake = true

@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Subject: [PATCH] iOS sideload: wait for a Metal device before in-process GL init
+
+ANGLE asks for a Metal device once, during GL initialization, and caches a
+nil answer for the rest of the process, after which no web content can be
+rasterized. The in-process GPU thread can start before the app's first scene
+connects, so poll MTLCreateSystemDefaultDevice() for up to two seconds before
+GpuInit runs. (Blinker Fluid hit this; its fix called back into content_shell,
+this one is self-contained.)
+
+Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
+applies with git am --3way. Verify on a Mac before trusting it.
+---
+diff --git a/content/gpu/BUILD.gn b/content/gpu/BUILD.gn
+index 19e7f3c36f27547df6b98d8c002e44a4138d44e6..b1ae50e1f826313078f0b2e152ad3e3a0635e76e 100644
+--- a/content/gpu/BUILD.gn
++++ b/content/gpu/BUILD.gn
+@@ -116,6 +116,15 @@ target(link_target_type, "gpu_sources") {
+     deps += [ "//components/metal_util" ]
+   }
+ 
++  if (is_ios) {
++    # [ios-blink-sideload] Wait for Metal before in-process GL init.
++    sources += [
++      "ios_sideload_metal_wait.h",
++      "ios_sideload_metal_wait.mm",
++    ]
++    frameworks = [ "Metal.framework" ]
++  }
++
+   if (use_ozone) {
+     deps += [ "//ui/ozone" ]
+   }
+diff --git a/content/gpu/ios_sideload_metal_wait.h b/content/gpu/ios_sideload_metal_wait.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..869e5bd3abd373915038ecdfdbe2b150b2e3d4f4
+--- /dev/null
++++ b/content/gpu/ios_sideload_metal_wait.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_GPU_IOS_SIDELOAD_METAL_WAIT_H_
++#define CONTENT_GPU_IOS_SIDELOAD_METAL_WAIT_H_
++
++namespace content {
++
++// [ios-blink-sideload] Blocks the calling thread until a Metal device can be
++// created or |timeout_ms| elapses. Returns whether a device became available.
++bool WaitForIOSMetalDevice(int timeout_ms);
++
++}  // namespace content
++
++#endif  // CONTENT_GPU_IOS_SIDELOAD_METAL_WAIT_H_
+diff --git a/content/gpu/ios_sideload_metal_wait.mm b/content/gpu/ios_sideload_metal_wait.mm
+new file mode 100644
+index 0000000000000000000000000000000000000000..f01e3d0f5cc1f4e8772f242214aad1c6d96134ca
+--- /dev/null
++++ b/content/gpu/ios_sideload_metal_wait.mm
+@@ -0,0 +1,34 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/gpu/ios_sideload_metal_wait.h"
++
++#import <Metal/Metal.h>
++
++#include "base/logging.h"
++#include "base/threading/platform_thread.h"
++#include "base/time/time.h"
++
++namespace content {
++
++bool WaitForIOSMetalDevice(int timeout_ms) {
++  constexpr base::TimeDelta kPollInterval = base::Milliseconds(40);
++  const base::TimeTicks deadline =
++      base::TimeTicks::Now() + base::Milliseconds(timeout_ms);
++  while (true) {
++    @autoreleasepool {
++      if (MTLCreateSystemDefaultDevice()) {
++        return true;
++      }
++    }
++    if (base::TimeTicks::Now() >= deadline) {
++      LOG(ERROR) << "No Metal device after " << timeout_ms
++                 << " ms; GL/ANGLE initialization is likely to fail.";
++      return false;
++    }
++    base::PlatformThread::Sleep(kPollInterval);
++  }
++}
++
++}  // namespace content
+diff --git a/content/gpu/in_process_gpu_thread.cc b/content/gpu/in_process_gpu_thread.cc
+index 032d70ce65fbc43b86308bdd90cbc3aa3517b624..2e3dc5db9f0518f605d8afa9c34d62183ac6d241 100644
+--- a/content/gpu/in_process_gpu_thread.cc
++++ b/content/gpu/in_process_gpu_thread.cc
+@@ -27,6 +27,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++#include "content/gpu/ios_sideload_metal_wait.h"
+ #include "gpu/ipc/common/ios/be_layer_hierarchy_transport.h"
+ #endif
+ 
+@@ -98,6 +99,14 @@ void InProcessGpuThread::Init() {
+     gpu_process_ = std::make_unique<ChildProcess>(io_thread_type);
+   }
+ 
++#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++  // [ios-blink-sideload] ANGLE asks for a Metal device once, during GL init,
++  // and keeps a nil answer for the life of the process (no GL, no web
++  // content). This thread can start before the first scene connects, so give
++  // Metal a bounded chance to become available first.
++  WaitForIOSMetalDevice(/*timeout_ms=*/2000);
++#endif
++
+   auto gpu_init = gpu::GpuInit::Create();
+   gpu_init->InitializeInProcess(base::CommandLine::ForCurrentProcess(),
+                                 gpu_preferences_);
+-- 
+ios-blink-sideload

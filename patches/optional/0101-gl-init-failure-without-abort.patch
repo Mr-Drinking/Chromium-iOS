@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Subject: [PATCH] iOS sideload (optional): report GL init failure instead of aborting
+
+Optional, for diagnosis. Metal/ANGLE is the only GL backend on iOS, so when
+EGL display creation fails there is no implementation left and the
+NOTREACHED()/CHECK in gl_factory_ios.mm abort the single process. Log and
+return nullptr instead so GPU initialization fails visibly and logs survive.
+
+Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
+applies with git am --3way. Verify on a Mac before trusting it.
+---
+diff --git a/ui/gl/init/gl_factory_ios.mm b/ui/gl/init/gl_factory_ios.mm
+index 15301014b18fdb747043da087a73d8bd703868da..7db1df34460490c66ff0c06fdd216700c9061e88 100644
+--- a/ui/gl/init/gl_factory_ios.mm
++++ b/ui/gl/init/gl_factory_ios.mm
+@@ -6,6 +6,7 @@
+ 
+ #import <UIKit/UIKit.h>
+ 
++#include "base/logging.h"
+ #include "base/trace_event/trace_event.h"
+ #include "ui/gl/gl_context_egl.h"
+ #include "ui/gl/gl_context_stub.h"
+@@ -45,14 +46,22 @@ scoped_refptr<GLContext> CreateGLContext(GLShareGroup* share_group,
+       return stub_context;
+     }
+     default:
+-      NOTREACHED();
++      // [ios-blink-sideload] Metal/ANGLE is the only GL backend on iOS, so a
++      // failed EGL display leaves no implementation. Report failure instead of
++      // aborting the whole (single) process so the logs survive.
++      LOG(ERROR) << "No GL implementation; cannot create a GL context.";
++      return nullptr;
+   }
+ }
+ 
+ scoped_refptr<GLSurface> CreateViewGLSurface(GLDisplay* display,
+                                              gfx::AcceleratedWidget window) {
+   TRACE_EVENT0("gpu", "gl::init::CreateViewGLSurface");
+-  CHECK_NE(kGLImplementationNone, GetGLImplementation());
++  if (GetGLImplementation() == kGLImplementationNone) {
++    // [ios-blink-sideload] See CreateGLContext().
++    LOG(ERROR) << "No GL implementation; cannot create a view surface.";
++    return nullptr;
++  }
+   switch (GetGLImplementation()) {
+     case kGLImplementationEGLANGLE:
+       if (window != gfx::kNullAcceleratedWidget) {
+@@ -68,7 +77,8 @@ scoped_refptr<GLSurface> CreateViewGLSurface(GLDisplay* display,
+     case kGLImplementationStubGL:
+       return InitializeGLSurface(new GLSurfaceStub());
+     default:
+-      NOTREACHED();
++      LOG(ERROR) << "No GL implementation; cannot create a view surface.";
++      return nullptr;
+   }
+ }
+ 
+@@ -89,7 +99,8 @@ scoped_refptr<GLSurface> CreateOffscreenGLSurface(GLDisplay* display,
+     case kGLImplementationStubGL:
+       return InitializeGLSurface(new GLSurfaceStub());
+     default:
+-      NOTREACHED();
++      LOG(ERROR) << "No GL implementation; cannot create an offscreen surface.";
++      return nullptr;
+   }
+ }
+ 
+-- 
+ios-blink-sideload

@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Subject: [PATCH] iOS sideload (optional): disable camera/microphone capture
+
+Optional. Blinker Fluid saw crashes when heavy pages enumerated cameras and
+microphones inside the single process (iOS 15). This reports no capture
+devices and refuses to open a camera. Only apply it if device enumeration
+turns out to crash on iOS 27; it disables getUserMedia capture.
+
+Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
+applies with git am --3way. Verify on a Mac before trusting it.
+---
+diff --git a/content/browser/renderer_host/media/media_devices_manager.cc b/content/browser/renderer_host/media/media_devices_manager.cc
+index da86c44a2a04890259b3c68055c728e867712a50..530f24088d115c419d310e4aab2114b0e5b7e7f7 100644
+--- a/content/browser/renderer_host/media/media_devices_manager.cc
++++ b/content/browser/renderer_host/media/media_devices_manager.cc
+@@ -1443,6 +1443,19 @@ void MediaDevicesManager::EnumerateSystemDevices(uint64_t request_id,
+                          request_id, DeviceTypeToString(type)));
+ 
+   cache_info.UpdateStarted();
++#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++  // [ios-blink-sideload] Optional guard: report no cameras or microphones so
++  // pages that enumerate devices on load never reach AVFoundation capture
++  // inside the single process. Audio output enumeration is unaffected.
++  if (type == MediaDeviceType::kMediaAudioInput ||
++      type == MediaDeviceType::kMediaVideoInput) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&MediaDevicesManager::DevicesEnumerated,
++                                  weak_factory_.GetWeakPtr(), request_id, type,
++                                  blink::WebMediaDeviceInfoArray()));
++    return;
++  }
++#endif
+   switch (type) {
+     case MediaDeviceType::kMediaAudioInput:
+       EnumerateAudioDevices(request_id, true /* is_input */);
+diff --git a/media/capture/video/apple/video_capture_device_avfoundation.mm b/media/capture/video/apple/video_capture_device_avfoundation.mm
+index 6e536b47a49f9d981dc721bae6f2207c2406c759..f4aa9ff449d5026193ee2cc620d7ed3c822b5a8d 100644
+--- a/media/capture/video/apple/video_capture_device_avfoundation.mm
++++ b/media/capture/video/apple/video_capture_device_avfoundation.mm
+@@ -438,6 +438,13 @@ AVCaptureDeviceFormat* FindBestCaptureFormat(
+     return YES;
+   }
+ 
++#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++  // [ios-blink-sideload] Optional guard: camera capture is not supported in
++  // the single-process sideload build yet.
++  *outMessage = @"Video capture is disabled in this build.";
++  return NO;
++#endif
++
+   // Look for input device with requested name.
+   _captureDevice = [AVCaptureDevice deviceWithUniqueID:deviceId];
+   if (!_captureDevice) {
+-- 
+ios-blink-sideload
