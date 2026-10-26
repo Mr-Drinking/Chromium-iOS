@@ -4,3 +4,5 @@ dist/
 *.ipa
 __pycache__/
 .DS_Store
+# Per-machine settings (see scripts/config.sh).
+scripts/config.local.sh

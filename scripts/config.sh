@@ -5,12 +5,22 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Per-machine settings (paths, Xcode) go in the untracked
+# scripts/config.local.sh, sourced before the defaults below. Write them as
+# ': "${VAR:=value}"' so the environment still wins, e.g.
+#   : "${CHROMIUM_DIR:=/Volumes/Build/chromium}"
+#   : "${DEVELOPER_DIR:=/Volumes/Build/Xcode.app/Contents/Developer}"; export DEVELOPER_DIR
+if [ -f "$REPO_ROOT/scripts/config.local.sh" ]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/scripts/config.local.sh"
+fi
+
 # Pinned Chromium main revision: green on the official iOS Blink CI builder
-# (ios-blink-rel-fyi, build 8666930859126518865, 2026-10-25), which compiles
+# (ios-blink-rel-fyi, build 8666871797155972657, 2026-10-26), which compiles
 # "all" with use_blink=true and runs tests on an iPhone 16 / iOS 27.0
-# simulator with Xcode 27 (27a266a). DEPS pins V8 1be68595, ANGLE 9addc298.
-CHROMIUM_REV="${CHROMIUM_REV:-d586be9fa9b8009487056edccf01555bb18dc3b2}"
-CHROMIUM_VERSION="${CHROMIUM_VERSION:-158.0.8125.0}"
+# simulator with Xcode 27 (27a266a). DEPS pins V8 f7be3c62, ANGLE ab90d2a9.
+CHROMIUM_REV="${CHROMIUM_REV:-4558926cce232609ce125114e633e0b3a67b793d}"
+CHROMIUM_VERSION="${CHROMIUM_VERSION:-158.0.8127.0}"
 
 # gclient root; the Chromium checkout ends up in "$CHROMIUM_DIR/src".
 # Needs roughly 150-200 GB free.

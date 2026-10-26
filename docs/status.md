@@ -1,6 +1,6 @@
 # 进度与待验证事项
 
-最后更新：2026-10-26（在云端 Linux 会话里完成；当时还没有 Mac，所以下面所有"阶段"都没开始执行）。
+最后更新：2026-10-27（Mac 上：环境检查通过；固定版本升到 `4558926c`；正在拉源码，下完自动编 content_shell 基线）。
 
 **每完成一步、每确认或推翻一条假设，都更新这个文件。** 它是项目的唯一进度记录。
 
@@ -8,19 +8,32 @@
 
 | 项 | 值 | 依据 |
 |---|---|---|
-| Chromium | `d586be9fa9b8009487056edccf01555bb18dc3b2`（158.0.8125.0，main@{#1726673}，2026-10-25） | 官方 `ios-blink-rel-fyi` CI 第 8666930859126518865 次构建通过 |
-| V8 | `1be68595cdcd23a12bcfc88afb1722af64b7c399` | 上面提交的 DEPS |
-| ANGLE | `9addc2983b90152f628cfdaea194983b46b254bd` | 同上 |
+| Chromium | `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0，main@{#1726971}，2026-10-26） | 官方 `ios-blink-rel-fyi` CI 第 42241 次构建（ID 8666871797155972657）通过 |
+| V8 | `f7be3c62b2a158365e646b8dd4ed8cb61c072cae` | 上面提交的 DEPS |
+| ANGLE | `ab90d2a96dea191f14a96d4b2c16b5a50ee73317` | 同上 |
 | CI 用的 Xcode | 27a266a（Xcode 27） | 该 builder 的 `properties.json` |
 | CI 编译目标 | `all`（`use_blink=true`，模拟器 Release） | 该 builder 的 `targets/chromium.fyi.json` |
 | CI 跑测试的模拟器 | iPhone 16 / iOS 27.0 | 同上 |
 | 用 Blink 时的最低 iOS | 26.0（`build/config/ios/ios_sdk_overrides.gni`） | 源码 |
 | Xcode 最低要求 | 26.0（`ios/build/chrome_build.gni` 里的 assert） | 源码 |
 
+2026-10-26 应用户要求，从 `d586be9f`（158.0.8125.0，main@{#1726673}，CI 构建 ID 8666930859126518865）升到这里，中间相差 298 个提交。以下都验证过：这个 builder 的 `gn-args.json`、`properties.json`、`targets/chromium.fyi.json` 新旧两版完全一样；表里其余几行引用的源码文件也没变。补丁涉及的文件里，只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 变了（上游加了一个和补丁无关的 `ClearFocusedElement()`）。全部补丁（含可选的）在新版本的这些文件上用 `git am --3way` 都能干净打上。
+
+## 本机环境（2026-10-26 验证过）
+
+| 项 | 值 |
+|---|---|
+| Mac | MacBook Air（Mac17,3），Apple M5 10 核（4 性能 + 6 能效），16 GB 内存，macOS 27.2 |
+| Xcode | 27.1（27A9275），在外置盘 `/Volumes/Chromium-iOS/Xcode.app`；iPhoneOS / iPhoneSimulator SDK 27.1；模拟器运行时 iOS 27.1；许可已接受，首次启动已完成 |
+| 怎么选 Xcode | 系统 `xcode-select` 保持 Command Line Tools（用户有意为之，不要改）。脚本通过 `scripts/config.local.sh` 设 `DEVELOPER_DIR=/Volumes/Chromium-iOS/Xcode.app/Contents/Developer`；没有这个设置的话，`00-check-env.sh` 会报 FAIL |
+| 源码位置 | 外置盘：`CHROMIUM_DIR=/Volumes/Chromium-iOS/chromium`，depot_tools 在 `/Volumes/Chromium-iOS/depot_tools`，都写在不进 git 的 `scripts/config.local.sh`。用户 2026-10-26 选的（已提醒外置盘经 hub 只有 5 Gb/s，会拖慢编译） |
+| 磁盘 | 内置盘 215 GB 可用；外置盘 `Chromium-iOS` 219 GB 可用（USB，目前经 hub 只跑 5 Gb/s，Owners: Disabled，Spotlight 在索引） |
+| 网络 | 走本地代理（环境变量 `HTTPS_PROXY` 和 git `http.proxy` 都已设置）；googlesource、GCS、CIPD 都能连通，固定提交在 googlesource 上查得到 |
+
 ## 阶段
 
 ### 阶段 0：环境与基线
-- [ ] `scripts/00-check-env.sh` 全部通过
+- [x] `scripts/00-check-env.sh` 全部通过（2026-10-26，要先设 `DEVELOPER_DIR`，见"本机环境"）
 - [ ] `scripts/01-fetch-chromium.sh` 完成，`src` 停在固定版本
 - [ ] （可选）未打补丁的 `content_shell` 在模拟器里能打开网页 → 证明工具链和源码没问题
 
@@ -60,7 +73,11 @@
 8. **侧载工具对 iOS 27 的支持。** Sideloadly / AltStore / SideStore 在 iOS 27 上的状态要以它们当时的说明为准。免费 Apple ID 每 7 天要重签一次。
 9. **应用组权限。** 真机包不签名，就不带任何权限声明；侧载工具可能因此不开通 Chrome 用的两个应用组（`group.<前缀>.chrome`/`.common`）。如果启动崩在共享容器相关代码，用 `scripts/05-package-ipa.sh --with-app-groups` 重新打包（临时签名写入声明）。侧载工具会不会改写应用组名称还不确定。
 10. **Google 账号。** Chromium 构建没有 Google API key 和内部组件，登录/同步、Discover、Lens 等大概率不可用。
+11. **`DEVELOPER_DIR` 能不能传到构建的每一步。** `xcode-select -p`、`xcodebuild`、`xcrun` 都认它（验证过）；gn 生成时的 SDK 探测、siso 在本地执行的 actool/ibtool 等动作是否都继承这个环境变量，还没验证。如果编译时报找不到 Xcode 工具或 SDK，先在 Chromium 的 `src` 里 `git grep DEVELOPER_DIR build/` 看构建怎么处理它；临时改 `xcode-select` 是最后手段，要先问用户。
+12. **本机 Xcode 27.1 比 CI 的 27.0 新。** SDK 小版本不同可能带来少量编译错误。推测概率不高：新版本 SDK 里新加的弃用标记，只有部署目标不低于弃用版本时才会报警告，而这里的部署目标是 26.0。
 
 ## 日志
 
 - 2026-10-26：选定固定版本 `d586be9f`；对比 Blinker Fluid 全部改动并分类；写好补丁 0001–0003 和两个可选补丁，在固定版本的原始文件上验证 `git am --3way` 能干净打上；写好脚本（`bash -n` 和 shellcheck 通过，打补丁脚本在模拟的 checkout 上试跑过）和 `tools/blinker_rebase.py`（对固定版本跑过一遍，结果见 patch-triage.md）。未编译。
+- 2026-10-26（Mac，第一次实际执行）：`00-check-env.sh` 不设 `DEVELOPER_DIR` 时报 FAIL，因为 `xcode-select` 指向 Command Line Tools（用户有意保持）；设成外置盘上的 Xcode 后全部通过，只剩"depot_tools 还没装"的提示（`01` 会自己装）。记录了本机环境；检查脚本的 FAIL 提示加上 `DEVELOPER_DIR` 的用法；新增待验证第 11、12 条。还没拉源码。
+- 2026-10-26～27（Mac）：用户选外置盘放源码，并要求升到最新版本。按固定规则取官方 iOS Blink CI 最近一次通过的提交（不直接用 main 最新），从 `d586be9f` 升到 `4558926c`（158.0.8127.0），核对结果写在"固定版本"表下面；`config.sh`、`CLAUDE.md`、`README.md` 等处的版本号一起改了。新增 `scripts/config.local.sh`（不进 git）存本机路径，`config.sh` 会自动读取。开始在后台拉源码，下完自动编未打补丁的模拟器版 `content_shell` 作基线。

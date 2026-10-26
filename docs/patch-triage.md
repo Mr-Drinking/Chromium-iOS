@@ -1,6 +1,6 @@
 # Blinker Fluid 补丁分类
 
-Blinker Fluid（[Nodesclock/Blinker-Fluid](https://github.com/Nodesclock/Blinker-Fluid)，GPL-3.0）把 Chromium Blink 移植到不带 BrowserEngineKit 权限的 iOS 上。它以“整文件替换”的形式发布（基于 Chromium 149.0.7821.0，`31dce68b`）。本表是逐文件对比官方 M149 后的分类，以及用 `tools/blinker_rebase.py` 三方合并到本项目固定版本（Chromium 158.0.8125.0，`d586be9f`）的结果。
+Blinker Fluid（[Nodesclock/Blinker-Fluid](https://github.com/Nodesclock/Blinker-Fluid)，GPL-3.0）把 Chromium Blink 移植到不带 BrowserEngineKit 权限的 iOS 上。它以“整文件替换”的形式发布（基于 Chromium 149.0.7821.0，`31dce68b`）。本表是逐文件对比官方 M149 后的分类，以及用 `tools/blinker_rebase.py` 三方合并到当时的固定版本（Chromium 158.0.8125.0，`d586be9f`）的结果。现在的固定版本 `4558926c` 只比它新一天，结果应该基本一样（推测，没有重跑）。
 
 - 不含 `content/shell/*`：那是它的界面（28 个文件，约 +1.1 万行），我们用 Chrome 自己的界面，用不上。
 - “合并到 158”只说明文本上有没有冲突，不代表能编译；Blinker 的文件里还夹带不少 clang-format 格式化改动，冲突很多来自这些噪音。

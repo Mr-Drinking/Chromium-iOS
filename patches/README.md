@@ -1,6 +1,6 @@
 # 补丁系列
 
-全部基于 Chromium `d586be9fa9b8009487056edccf01555bb18dc3b2`（158.0.8125.0）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
+写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
 
 **状态：没有编译过。** 只验证了能在固定版本的原始文件上干净打上，并逐个核对了用到的接口在 158 里存在。
 
@@ -27,4 +27,4 @@
 
 ## 更新补丁
 
-见 [docs/build-guide.md 第 7 节](../docs/build-guide.md#7-修改补丁)：在 `src` 的 `ios-blink-sideload` 分支上修改并提交，再用 `git format-patch d586be9f..HEAD` 导出覆盖这里的文件。
+见 [docs/build-guide.md 第 7 节](../docs/build-guide.md#7-修改补丁)：在 `src` 的 `ios-blink-sideload` 分支上修改并提交，再用 `git format-patch 4558926c..HEAD` 导出覆盖这里的文件。

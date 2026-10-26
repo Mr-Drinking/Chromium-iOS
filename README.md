@@ -29,7 +29,7 @@
 
 ## 快速开始（在 Mac 上）
 
-固定版本：Chromium `d586be9f`（158.0.8125.0，2026-10-25 官方 iOS Blink CI 通过的提交）。需要 Xcode 26 或更新（推荐 Xcode 27）、约 200 GB 磁盘。
+固定版本：Chromium `4558926c`（158.0.8127.0，2026-10-26 官方 iOS Blink CI 通过的提交）。需要 Xcode 26 或更新（推荐 Xcode 27）、约 200 GB 磁盘。
 
 ```bash
 scripts/00-check-env.sh                  # 检查 Xcode、磁盘、内存
@@ -40,7 +40,7 @@ scripts/02-apply-patches.sh              # 在 src 上建分支 ios-blink-sidelo
 scripts/03-build.sh sim                  # 编 Chrome（模拟器）
 scripts/04-run-simulator.sh              # 装到模拟器并启动，终端里看日志
 scripts/03-build.sh device               # 编真机版（未签名）
-scripts/05-package-ipa.sh                # 生成 dist/Chromium-158.0.8125.0-sideload.ipa
+scripts/05-package-ipa.sh                # 生成 dist/Chromium-158.0.8127.0-sideload.ipa
 ```
 
 IPA 用 Sideloadly、AltStore 或 SideStore 安装，手机需要打开开发者模式。细节和排错见 [docs/build-guide.md](docs/build-guide.md)。

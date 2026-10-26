@@ -25,8 +25,8 @@ if [ "$free_gb" -lt 150 ]; then bad "${free_gb} GB free; need ~150-200 GB for ch
 note "Xcode"
 dev_dir=$(xcode-select -p 2>/dev/null || true)
 case "$dev_dir" in
-  *CommandLineTools*|"") bad "xcode-select points at '$dev_dir'; run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" ;;
-  *) ok "developer dir $dev_dir" ;;
+  *CommandLineTools*|"") bad "xcode-select points at '$dev_dir'; run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer (or, to leave the system setting alone: export DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer)" ;;
+  *) ok "developer dir $dev_dir${DEVELOPER_DIR:+ (from DEVELOPER_DIR)}" ;;
 esac
 if xcode_ver=$(xcodebuild -version 2>/dev/null); then
   xcode_major=$(echo "$xcode_ver" | awk 'NR==1 {split($2, v, "."); print v[1]}')

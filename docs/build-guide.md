@@ -7,6 +7,8 @@ export CHROMIUM_DIR=/Volumes/Build/chromium
 export BUNDLE_ID_PREFIX=com.yourname.iosblink   # 换成你自己的反向域名
 ```
 
+本机固定不变的设置可以写进 `scripts/config.local.sh`（不进 git，`config.sh` 会自动读取），省得每次都 export。写成 `: "${CHROMIUM_DIR:=/Volumes/Build/chromium}"` 这种形式，环境变量仍然优先。
+
 ## 0. 准备
 
 - Apple 芯片的 Mac，建议 32 GB 内存（16 GB 也能编，但慢）；约 200 GB 可用磁盘。
@@ -17,6 +19,7 @@ export BUNDLE_ID_PREFIX=com.yourname.iosblink   # 换成你自己的反向域名
   sudo xcodebuild -runFirstLaunch
   ```
   在 Xcode › Settings › Components 里装上 iOS 模拟器运行时。
+- 不想改系统的 `xcode-select`（比如 Xcode 放在外置盘，系统保持 Command Line Tools）：跑脚本前 `export DEVELOPER_DIR=<Xcode.app 的路径>/Contents/Developer`。`xcode-select -p`、`xcodebuild`、`xcrun` 都认这个变量（验证过）；Chromium 构建的每一步是否都继承它还没验证（`docs/status.md` 第 11 条）。
 - 检查环境：
   ```bash
   scripts/00-check-env.sh
@@ -28,7 +31,7 @@ export BUNDLE_ID_PREFIX=com.yourname.iosblink   # 换成你自己的反向域名
 scripts/01-fetch-chromium.sh
 ```
 
-- 会在 `~/depot_tools` 装 depot_tools（已有就跳过），在 `~/chromium` 写好只针对 iOS 的 `.gclient`，然后浅克隆固定版本 `d586be9f` 并运行 hooks。
+- 会在 `~/depot_tools` 装 depot_tools（已有就跳过），在 `~/chromium` 写好只针对 iOS 的 `.gclient`（这两个是默认位置），然后浅克隆固定版本（`scripts/config.sh` 里的 `CHROMIUM_REV`）并运行 hooks。
 - 第一次要下载几十 GB，耗时取决于网速。浅克隆指定提交失败时，脚本会改用完整历史重试（体积大很多）。
 - 结束时会校验 `src` 确实停在固定版本。
 
@@ -61,7 +64,7 @@ scripts/04-run-simulator.sh          # 默认 "iPhone 16" 模拟器，第二个�
 
 ```bash
 scripts/03-build.sh device
-scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8125.0-sideload.ipa
+scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.ipa
 ```
 
 产物未签名（如需让侧载工具开通 Chrome 的两个应用组，加 `--with-app-groups`，见第 6 节）。安装方式三选一：
@@ -103,7 +106,7 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8125.0-sideload.i
 
 1. 在 `~/chromium/src` 的 `ios-blink-sideload` 分支上直接改代码、编译、测试。
 2. 修改完提交到对应补丁的 commit（`git commit --fixup` 加 `git rebase -i --autosquash`，或新开一个 commit 作为新补丁）。
-3. 导出：`git format-patch d586be9f..HEAD -o /tmp/new-patches`，把结果覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。
+3. 导出：`git format-patch 4558926c..HEAD -o /tmp/new-patches`，把结果覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。
 4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。
 5. 更新 `docs/status.md`，提交本仓库。
 
@@ -120,6 +123,9 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8125.0-sideload.i
 2. 改 `scripts/config.sh` 里的 `CHROMIUM_REV` 和 `CHROMIUM_VERSION`。
 3. `scripts/01-fetch-chromium.sh`，再 `scripts/02-apply-patches.sh`；有冲突就解决，然后按第 7 节重新导出补丁。
 4. 同步更新 `args/` 里的参数（新版本可能改名或新增开关）和 `docs/status.md` 的固定版本表。
+5. 用 `git grep` 搜旧版本的短哈希和版本号，把 `CLAUDE.md`、`README.md`、本文件等处写死的引用一起改掉。
+
+还没拉源码时，可以先不下载就检查补丁：对比新旧版本里补丁涉及文件的 blob ID（gitiles 目录的 `?format=JSON`）；有变化的，在只放这些文件的临时 git 仓库里先提交旧版、再提交新版，然后 `git am --3way` 试打。2026-10-26 那次升级就是这样做的。
 
 ## 9. 以后的方向
 

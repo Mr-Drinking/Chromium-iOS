@@ -1,7 +1,7 @@
 # Chromium for the iOS Simulator with the Blink engine.
 #
 # Based on the official iOS Blink CI builder at the pinned revision
-# (infra/config/generated/builders/ci/ios-blink-rel-fyi/gn-args.json @ d586be9f),
+# (infra/config/generated/builders/ci/ios-blink-rel-fyi/gn-args.json @ 4558926c),
 # minus Google's remote execution. scripts/03-build.sh copies this file to
 # <out>/args.gn and replaces @BUNDLE_ID_PREFIX@.
 

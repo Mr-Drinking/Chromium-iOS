@@ -1,6 +1,6 @@
 # 结构与补丁说明
 
-以下路径都相对于 Chromium 的 `src/`，基于固定版本 `d586be9f`（158.0.8125.0）。
+以下路径都相对于 Chromium 的 `src/`。分析是在 `d586be9f`（158.0.8125.0）上做的；固定版本后来升到 `4558926c`（158.0.8127.0）。两者之间，补丁涉及的文件只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 有变化：上游新加了一个和补丁无关的 `ClearFocusedElement()`（验证过）。
 
 ## 1. Chrome iOS 怎么换成 Blink 内核
 
