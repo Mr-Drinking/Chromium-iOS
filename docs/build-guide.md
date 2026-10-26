@@ -32,7 +32,7 @@ scripts/01-fetch-chromium.sh
 ```
 
 - 会在 `~/depot_tools` 装 depot_tools（已有就跳过），在 `~/chromium` 写好只针对 iOS 的 `.gclient`（这两个是默认位置），然后浅克隆固定版本（`scripts/config.sh` 里的 `CHROMIUM_REV`）并运行 hooks。
-- 第一次要下载几十 GB，耗时取决于网速。浅克隆指定提交失败时，脚本会改用完整历史重试（体积大很多）。
+- 第一次要下载几十 GB，耗时取决于网速。googlesource 支持按提交号浅克隆（2026-10-27 验证过）。同步失败时脚本直接报错退出，重跑会接着上次的进度同步；不会自动改用完整历史，因为那要多下几十 GB，而失败原因多半跟历史无关。确实需要完整历史时用 `FULL_HISTORY=1 scripts/01-fetch-chromium.sh`。
 - 结束时会校验 `src` 确实停在固定版本。
 
 ## 2. 基线（可选，推荐）
@@ -45,6 +45,8 @@ scripts/04-run-simulator.sh content_shell
 ```
 
 官方 CI 每天在 iOS 27 模拟器上跑基于 content_shell 的测试，这一步理论上应该能成功。如果这里就失败，问题在环境，不在补丁。
+
+注意：`args/` 关掉了 Chrome 的全部 app 扩展，不打补丁 0004 的话，`gn gen` 就会报错（验证过）。要做"代码不打补丁"的基线，先只打 0004（`git -C <src> am --3way patches/0004-*.patch`），它只改 GN，不改运行时代码。
 
 ## 3. 打补丁，模拟器里跑 Chrome
 
@@ -101,6 +103,8 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.i
 | 用一会儿被系统杀掉 | jetsam 内存上限：调低 0001 里的堆和 GPU 内存参数，少开标签页 |
 | 视频黑屏 | 原生视频层；0001 已默认关闭 `avfoundation-overlays`，若仍黑屏需移植 `ca_renderer_layer_tree.mm` 的修复 |
 | 启动时崩在 app group / 共享容器相关代码 | 未签名的包不带权限声明，侧载工具没开通应用组：用 `scripts/05-package-ipa.sh --with-app-groups` 重新打包再装 |
+| `gn gen` 报 `Assignment had no effect`，指向 `ios/chrome/app/BUILD.gn` 的 `_extension_toolchain`（遇到过） | 扩展全关时上游 GN 会报这个错，补丁 0004 修的就是它；确认 0004 已经打上 |
+| `gclient sync` 报 `git-lfs: command not found`（遇到过，在 `third_party/litert/src`） | 全局 git 配置里有 `git lfs install` 留下的"必需"过滤器，但没装 git-lfs。`scripts/config.sh` 已经让脚本里的 git 把 LFS 文件检出成指针，跟官方构建机一样（LiteRT 里的 LFS 文件是用不到的预编译库）。在终端里手动跑 `gclient` 前，先 `source scripts/config.sh` |
 
 ## 7. 修改补丁
 

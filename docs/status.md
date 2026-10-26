@@ -1,6 +1,6 @@
 # 进度与待验证事项
 
-最后更新：2026-10-27（Mac 上：环境检查通过；固定版本升到 `4558926c`；正在拉源码，下完自动编 content_shell 基线）。
+最后更新：2026-10-27（Mac 上：源码已拉好，补丁 0001–0004 已打上，`gn gen` 通过，正在编 Chrome 模拟器版）。
 
 **每完成一步、每确认或推翻一条假设，都更新这个文件。** 它是项目的唯一进度记录。
 
@@ -29,16 +29,18 @@
 | 源码位置 | 外置盘：`CHROMIUM_DIR=/Volumes/Chromium-iOS/chromium`，depot_tools 在 `/Volumes/Chromium-iOS/depot_tools`，都写在不进 git 的 `scripts/config.local.sh`。用户 2026-10-26 选的（已提醒外置盘经 hub 只有 5 Gb/s，会拖慢编译） |
 | 磁盘 | 内置盘 215 GB 可用；外置盘 `Chromium-iOS` 219 GB 可用（USB，目前经 hub 只跑 5 Gb/s，Owners: Disabled，Spotlight 在索引） |
 | 网络 | 走本地代理（环境变量 `HTTPS_PROXY` 和 git `http.proxy` 都已设置）；googlesource、GCS、CIPD 都能连通，固定提交在 googlesource 上查得到 |
+| git 配置 | `~/.gitconfig` 里原来有 `git lfs install` 留下的 `filter.lfs.*`（`required = true`），但没装 git-lfs。用户 2026-10-27 自己删掉了（`git config --global --remove-section filter.lfs`）。`scripts/config.sh` 里的覆盖保留着，以防别的机器上也有这种配置 |
 
 ## 阶段
 
 ### 阶段 0：环境与基线
 - [x] `scripts/00-check-env.sh` 全部通过（2026-10-26，要先设 `DEVELOPER_DIR`，见"本机环境"）
-- [ ] `scripts/01-fetch-chromium.sh` 完成，`src` 停在固定版本
-- [ ] （可选）未打补丁的 `content_shell` 在模拟器里能打开网页 → 证明工具链和源码没问题
+- [x] `scripts/01-fetch-chromium.sh` 完成，`src` 停在固定版本（2026-10-27，`src` 约 26 GB，在外置盘）
+- [ ] （可选）未打补丁的 `content_shell` 在模拟器里能打开网页 → 证明工具链和源码没问题。**暂缓**：用 `args/` 的参数时，不打 0004 连 `gn gen` 都过不去；先直接编 Chrome，有需要对照时再编
 
 ### 阶段 1：模拟器里跑通 Chrome 界面
-- [ ] `scripts/02-apply-patches.sh` 打上 0001–0003
+- [x] `scripts/02-apply-patches.sh` 打上 0001–0004（2026-10-27）
+- [x] 模拟器和真机两套参数的 `gn gen` 都能通过（2026-10-27，需要 0004）
 - [ ] `scripts/03-build.sh sim` 编译通过（预计会有因 API 漂移导致的编译错误要修）
 - [ ] `scripts/04-run-simulator.sh` 启动后能看到 Chrome 界面
 - [ ] 能打开网页、滚动、输入文字（地址栏和网页输入框）
@@ -81,3 +83,5 @@
 - 2026-10-26：选定固定版本 `d586be9f`；对比 Blinker Fluid 全部改动并分类；写好补丁 0001–0003 和两个可选补丁，在固定版本的原始文件上验证 `git am --3way` 能干净打上；写好脚本（`bash -n` 和 shellcheck 通过，打补丁脚本在模拟的 checkout 上试跑过）和 `tools/blinker_rebase.py`（对固定版本跑过一遍，结果见 patch-triage.md）。未编译。
 - 2026-10-26（Mac，第一次实际执行）：`00-check-env.sh` 不设 `DEVELOPER_DIR` 时报 FAIL，因为 `xcode-select` 指向 Command Line Tools（用户有意保持）；设成外置盘上的 Xcode 后全部通过，只剩"depot_tools 还没装"的提示（`01` 会自己装）。记录了本机环境；检查脚本的 FAIL 提示加上 `DEVELOPER_DIR` 的用法；新增待验证第 11、12 条。还没拉源码。
 - 2026-10-26～27（Mac）：用户选外置盘放源码，并要求升到最新版本。按固定规则取官方 iOS Blink CI 最近一次通过的提交（不直接用 main 最新），从 `d586be9f` 升到 `4558926c`（158.0.8127.0），核对结果写在"固定版本"表下面；`config.sh`、`CLAUDE.md`、`README.md` 等处的版本号一起改了。新增 `scripts/config.local.sh`（不进 git）存本机路径，`config.sh` 会自动读取。开始在后台拉源码，下完自动编未打补丁的模拟器版 `content_shell` 作基线。
+- 2026-10-27（Mac）：第一次 `gclient sync`。`src` 按提交号浅克隆成功（验证过 googlesource 支持；中途经代理断了 3 次，gclient 自己重试成功了），约 26 GB。依赖 `third_party/litert/src` 检出失败，报 `git-lfs: command not found`：全局 git 配置要求必须有 LFS 过滤器，本机却没装 git-lfs。脚本原来的"浅克隆失败就改下完整历史"随即启动，被我停掉了，因为失败跟历史无关，继续下去会白下几十 GB。修复：`config.sh` 让脚本里的 git 把 LFS 文件检出成指针（LiteRT 的 LFS 文件是 23 个预编译库，Chromium 的 `BUILD.gn` 不用）；`01-fetch-chromium.sh` 去掉了自动回退，失败就退出，要完整历史可以手动设 `FULL_HISTORY=1`。手动修好 LiteRT 的检出后重新开始同步。
+- 2026-10-27（Mac）：同步续上后两分半就完成了，hooks 全部跑通，`src` 停在 `4558926c`。接着编 `content_shell` 基线，结果 `gn gen` 报错：`ios/chrome/app/BUILD.gn:1009` 的 `_extension_toolchain` 是 "Assignment had no effect"，因为 `args/` 把 Chrome 的 app 扩展全关了，上游没测过这种配置。新增补丁 0004（`not_needed`），按第 7 节的流程在 `ios-blink-sideload` 分支上提交后导出。`02-apply-patches.sh` 从头打 0001–0004 成功，模拟器和真机两套参数的 `gn gen` 都通过了（验证过）。"不打补丁的基线"已经做不成，所以暂缓，改为直接在后台编 Chrome 模拟器版。

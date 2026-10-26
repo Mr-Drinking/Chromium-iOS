@@ -67,6 +67,10 @@ IOSChromeMain()                       ios/chrome/app/startup/ios_chrome_main.mm
 
 ANGLE 只在 GL 初始化时要一次 Metal 设备，拿到 nil 就整个进程都没有 GL、网页画不出来。进程内 GPU 线程可能在 app 第一个 scene 连接前就启动，所以先最多等 2 秒（新文件 `ios_sideload_metal_wait.{h,mm}`）。
 
+### 0004 允许不带任何 app 扩展（`ios/chrome/app/BUILD.gn`）
+
+纯构建修复，不改运行时代码。`_extension_toolchain` 总会被赋值，但只在各个 `ios_enable_*_extension` 分支里用到。`args/` 把这些扩展全关了（见第 4 节），GN 就报 "Assignment had no effect"，连 `gn gen` 都过不去。补丁加了一行 `not_needed([ "_extension_toolchain" ])`。验证过：没有它 `gn gen` 失败，有了它模拟器和真机两套参数都能生成。
+
 ### 可选补丁
 
 - `optional/0101`：GL 实现为空时记录错误并返回空指针，而不是 `NOTREACHED()`/`CHECK` 直接崩溃。方便看日志。

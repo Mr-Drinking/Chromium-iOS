@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 00:32:16 +0800
+Subject: [PATCH] iOS sideload: allow building Chrome without any app extension
+
+ios/chrome/app/BUILD.gn sets _extension_toolchain unconditionally but only
+uses it inside the ios_enable_*_extension blocks. The sideload args turn
+all of those off (each extension would need its own App ID), and gn gen
+then fails with "Assignment had no effect". Mark the variable as not
+needed.
+
+Status: verified at Chromium 4558926c (158.0.8127.0) on a Mac: without it
+gn gen fails with args/simulator.gn, with it gn gen succeeds.
+
+diff --git a/ios/chrome/app/BUILD.gn b/ios/chrome/app/BUILD.gn
+index eac0593c15f744f2b013fdba87762d35ca62210e..eaefac00cace08078ad0469a96d09d51d16f4b92 100644
+--- a/ios/chrome/app/BUILD.gn
++++ b/ios/chrome/app/BUILD.gn
+@@ -1007,6 +1007,9 @@ chrome_app("chrome") {
+ 
+ if (current_toolchain == default_toolchain && !ios_chrome_generate_order_file) {
+   _extension_toolchain = "${current_toolchain}_app_ext"
++
++  # [ios-blink-sideload] Sideload builds turn off every extension below.
++  not_needed([ "_extension_toolchain" ])
+   if (ios_enable_share_extension) {
+     extension_bundle_data("share_extension_bundle") {
+       extension_name = "share_extension.appex"
+-- 
+2.54.0 (Apple Git-157)
+

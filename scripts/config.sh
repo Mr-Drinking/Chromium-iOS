@@ -40,6 +40,18 @@ PATCH_BRANCH="${PATCH_BRANCH:-ios-blink-sideload}"
 
 export PATH="$DEPOT_TOOLS_DIR:$PATH"
 
+# Check out Git LFS files as pointers, as Chromium's builders do. A global
+# "git lfs install" marks the lfs filter as required, and without git-lfs on
+# PATH that breaks deps using LFS (third_party/litert/src: prebuilt binaries
+# the build never uses). Appends to any GIT_CONFIG_COUNT already set.
+_n="${GIT_CONFIG_COUNT:-0}"
+for _kv in filter.lfs.process= filter.lfs.smudge= filter.lfs.clean= filter.lfs.required=false; do
+  export "GIT_CONFIG_KEY_$_n=${_kv%%=*}" "GIT_CONFIG_VALUE_$_n=${_kv#*=}"
+  _n=$((_n + 1))
+done
+export GIT_CONFIG_COUNT="$_n"
+unset _n _kv
+
 die() {
   echo "error: $*" >&2
   exit 1

@@ -34,12 +34,17 @@ if [ -d src/.git ] && [ -n "$(git -C src status --porcelain --untracked-files=no
   die "src/ has local changes; commit or stash them (scripts/02-apply-patches.sh re-applies the series on a fresh branch)"
 fi
 
-note "Syncing src@$CHROMIUM_REV (shallow; the first sync downloads tens of GB)"
-if ! gclient sync --nohooks --no-history --revision "src@$CHROMIUM_REV"; then
-  echo
-  echo "Shallow sync of a pinned revision failed. Retrying with full history"
-  echo "(much larger download; Ctrl-C to stop)."
+# Shallow by default: googlesource serves a pinned commit at depth 1. Full
+# history (FULL_HISTORY=1) is a much larger download, so it is never an
+# automatic fallback; most sync failures (network, one broken dep) have
+# nothing to do with history, and re-running resumes the sync.
+if [ "${FULL_HISTORY:-0}" = 1 ]; then
+  note "Syncing src@$CHROMIUM_REV with full history"
   gclient sync --nohooks --revision "src@$CHROMIUM_REV"
+else
+  note "Syncing src@$CHROMIUM_REV (shallow; the first sync downloads tens of GB)"
+  gclient sync --nohooks --no-history --revision "src@$CHROMIUM_REV" ||
+    die "gclient sync failed (see above). Re-run to resume; FULL_HISTORY=1 fetches full history instead (much larger)"
 fi
 
 note "Running hooks (toolchains, SDK checks)"
