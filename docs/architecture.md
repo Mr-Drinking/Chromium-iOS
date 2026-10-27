@@ -115,6 +115,31 @@ Chrome 的下拉动作（刷新、关闭标签页、新标签页）往网页的�
 
 Blink 版照 Android 的做法，把 Chrome 顶部、底部工具栏能收起的高度当成"浏览器控件"报给 Blink（`GetTopControlsHeight()`、`GetBottomControlsHeight()`，取自 `CRCWebViewportContainerView` 里写死的插入值：顶部 109 - 79 = 30 pt，底部 78 pt）。Blink 于是让网页多滚这么一段，等着工具栏收起后露出来。但工具栏从来不收起：Chrome 的 `FullscreenMediator` 只处理滚动视图"正在被拖动或减速"时的滚动，而 Blink 下那个滚动视图只是程序设置偏移的镜像，`isDragging` 永远是 NO。结果每个网页最后 108 pt 都被底部工具栏挡着，滑不到底（用户在真机上发现）。补丁报 0，Blink 的最大滚动距离就和可见区域一致。工具栏还是一直显示；要让它们像正版那样滚动时收起，得把 Blink 的滚动接进 Chrome 的 fullscreen 逻辑，没做。模拟器里验证过：之前滚到头还差 108 px，最后一个元素在工具栏下面；之后能滚到底、完整露出，顶部也没被挡。
 
+### 0013 下载（`ios/web/content/download/…`、`ios/web/download/download_controller_impl.mm` 等）
+
+Blink 版的 `ContentBrowserContext::GetDownloadManagerDelegate()` 返回空。没有委托时，content 把下载的目标路径定为空（调用方强制指定了路径的除外），空路径就等于取消（`DownloadManagerImpl::DetermineDownloadTarget`），所以点下载链接什么都不发生。Chrome 的下载界面（下载栏、"打开方式…"、存到"文件"）是围着 `web::DownloadTask` 写的，WebKit 版的任务由 `DownloadTaskImpl` 和 `DownloadControllerImpl` 提供。补丁把 content 的下载桥接成 `web::DownloadTask`：
+
+- `ContentDownloadManagerDelegate`（新）：content 来要下载目标时（`DetermineDownloadTarget`），先不回答，把 content 的 `DownloadItem` 和回调包进一个 `ContentDownloadTask`，通过 `DownloadControllerImpl` 新加的 `OnContentDownloadCreated()` 交给 Chrome，Chrome 再按 MIME 类型分给下载栏、PassKit、AR 预览等。找不到所属网页、或 Chrome 没有下载委托时，直接取消。下载 ID 自己编号（content shell 也是这么做的）。
+- `ContentDownloadTask`（新，继承 `DownloadTaskImpl`）：用户点"下载"后，Chrome 在临时目录里给一个路径（`StartInternal(path)`），任务这时才把它作为目标交给 content（中间文件是同目录的 `.crdownload`），之后把 content 的进度、完成、取消、中断转成 Chrome 的状态。content 在用户点"下载"之前就开始收数据了，所以小文件往往一点就完成。用户关掉下载栏、点"停止"或关掉标签页时，任务被取消或销毁：还没定目标的，回一个空路径让 content 取消；已经在下的，调 `Cancel()`。content 中断的下载不能"重试"（重试要换个路径重新下，任务没实现）。
+- 委托销毁时先从 content 的下载管理器上摘掉自己：`content::BrowserContext` 要等 `ContentBrowserContext` 的成员析构完才关闭下载管理器，那时还会调用委托的 `Shutdown()`。写法照 content shell。
+- PDF：Chrome 对下载完的 PDF 提供"打开"，做法是在新标签页里加载这个 `file://` 文件，靠 WKWebView 显示。Blink 在 iOS 上没有 PDF 查看器，结果只是又下载一次（验证过），所以 Blink 构建里 PDF 也只给"打开方式…"（`download_manager_mediator.mm`）。
+
+模拟器里验证过：zip 链接、带 `download` 属性的链接（显示属性给的文件名）、PDF 链接、页面用 Blob 生成的文件，都会弹出下载栏，下载后的文件在 app 的 Documents 里，SHA-256 和原文件一致；"打开方式…"弹出系统分享面板（能存到"文件"）。用限速的本地服务器测了下载前关掉下载栏、下载中途停止（Chrome 会先问"停止下载？"）、下载中关掉标签页，三种情况服务器都在同一秒看到连接断开，临时目录里不留文件。无痕模式下的下载没测（无痕被 0016 停用了）。
+
+### 0014 网页视图只认领自己实现了的动作（`content/browser/renderer_host/render_widget_host_view_ios_uiview.mm`）
+
+`RenderWidgetUIView` 的 `canPerformAction:withSender:` 对任何动作都返回 YES。UIKit 沿响应者链找动作的目标时，第一个说"能"的就是目标，于是焦点在网页上时，Chrome 的键盘快捷键（`keyCommand_openNewIncognitoTab` 等）和系统的拷贝（`copy:`）都发到了这个视图上。它没有这些方法，app 以 "unrecognized selector" 崩溃（接实体键盘时，验证过；三指捏合拷贝之类的编辑手势推测也会走到这里）。补丁改成只认领自己实现了的方法（`respondsToSelector:`），宿主 `RenderWidgetHostViewIOS` 已经销毁时一个都不认领（编辑命令会 CHECK 它）；再照上游已有的 `selectAll:`，把 `copy:`、`cut:`、`paste:` 实现成 Blink 的编辑命令。模拟器里验证过（接实体键盘）：输入框里 Cmd+A、Cmd+C 后，系统剪贴板里是输入框的文字，Cmd+V 能粘贴；Cmd+Shift+N 进到了 Chrome 的处理函数（接着撞上无痕的问题，见 0016）。
+
+### 0015 文字的编辑菜单（`ios/web/content/ui/content_context_menu_controller.mm`）
+
+长按网页文字时，Blink 选中一个词并请求上下文菜单（`ShowContextMenu`，参数里有选中的文字、是否可编辑、可做的编辑操作 `edit_flags` 和选区的矩形）。ios/web/content 只会把请求转给 Chrome，而 Chrome 只为链接和图片做菜单，所以文字什么菜单都没有，触屏上没法拷贝；`RenderWidgetUIView` 自己的编辑菜单也没实现（上游注释 "Needs an edit menu implementation"）。补丁在请求里没有链接和图片、但有选中文字或来自输入框时，改用系统的 `UIEditMenuInteraction` 弹出编辑菜单：菜单项用 UIKit 建议的标准命令，所以标题跟着系统语言（中文是"拷贝""全选"），再按 `edit_flags` 过滤（拷贝要有选中文字，剪切和粘贴要在输入框里，粘贴还要剪贴板里有文字）。主框架的选区矩形作为菜单要避开的区域，菜单优先显示在选中文字上方。命令沿响应者链交给 `RenderWidgetUIView`，由 0014 补上的 `copy:` 等方法执行。每个网页视图只挂一个菜单交互；菜单关闭时通知 content 上下文菜单已关闭。
+
+模拟器里验证过：长按普通文字弹出"拷贝 / 全选"，拷贝后系统剪贴板里是那个词；输入框里弹出"剪切 / 拷贝 / 粘贴 / 全选"，粘贴替换掉选中的词；"全选"后整页选中、菜单还在，再拷贝得到全文（含输入框里的值）；菜单显示在选区上方，第一行文字上方放不下时会盖到地址栏上（Safari 也是这样）；弹出菜单后滑动页面，菜单自动消失；长按链接仍然是 Chrome 的链接菜单。还没有选区拖柄，选区只能是一个词或全选。
+
+### 0016 停用无痕模式（`ios/chrome/browser/policy/model/policy_util.mm`）
+
+content 的单进程模式只有一个进程内渲染器，也只支持一个浏览器上下文：`RenderProcessHostImpl::IsSuitableHost` 在单进程时直接返回"合适"，只用 DCHECK 检查浏览器上下文是否一致。无痕标签页用的是另一个浏览器上下文：模拟器配置开着 DCHECK，一打开就崩（"Single-process mode does not support multiple browser contexts"，验证过）；真机配置不开 DCHECK，推测它会和普通标签页共用同一个渲染器进程和绑在它上面的存储，等于假无痕（没在真机上试）。补丁让 `IsIncognitoModeDisabled()` 在 Blink 构建里总是返回 true，效果和企业策略 `IncognitoModeAvailability` 停用无痕一样：新建无痕标签页、快捷键、从别的 app 用无痕打开等入口都按停用处理（读源码：它们都查这个函数）。链接菜单里的"在无痕模式下打开"原来不看策略（点了没反应），补丁让它和其他无痕动作一样变灰。标签页网格的无痕页显示的是策略停用时的文字"您的组织关闭了私密浏览功能"。模拟器里验证过：Cmd+Shift+N 不再崩溃；溢出菜单的"打开新的无痕式标签页"和链接菜单的"在无痕模式下打开"是灰的；无痕页显示"无痕模式不可用"。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：

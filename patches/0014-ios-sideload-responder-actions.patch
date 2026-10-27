@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 15:59:44 +0800
+Subject: [PATCH] iOS sideload: don't claim responder actions the web view
+ lacks
+
+RenderWidgetUIView answered YES to canPerformAction:withSender: for
+every action, so UIKit picked it as the target of any action sent
+through the responder chain, including ones it does not implement. With
+a hardware keyboard, Chrome's shortcuts (such as Cmd+Shift+N) and Cmd+C
+crashed the app with "unrecognized selector" while a page had focus.
+
+Claim only the actions the view implements, and none once its
+RenderWidgetHostViewIOS is gone, since the edit commands CHECK it. Also
+implement copy:, cut: and paste: like selectAll:, as Blink edit
+commands, so that Cmd+C, Cmd+X and Cmd+V, the three-finger editing
+gestures and the system edit menu work in web pages.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator with a
+hardware keyboard: in a text field, Cmd+A and Cmd+C put the text on the
+system pasteboard and Cmd+V pastes it; Cmd+Shift+N reaches Chrome's
+handler instead of crashing.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index 2762f2adf4f2041691117a64a0d731bce923ee40..cf45abbecf0ca179a401c6afe04e6b505775dc8d 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -698,7 +698,12 @@ - (void)extendInStorageDirection:(UITextStorageDirection)direction
+ }
+ 
+ - (BOOL)canPerformAction:(SEL)action withSender:(nullable id)sender {
+-  return YES;
++  // [ios-blink-sideload] Only claim actions this view implements, and none
++  // once its RenderWidgetHostViewIOS is gone (the edit commands CHECK it).
++  // Claiming every action made UIKit send this view actions it lacks, such as
++  // the embedder's keyboard shortcuts, which crashed with "unrecognized
++  // selector".
++  return _view && [self respondsToSelector:action];
+ }
+ 
+ - (BOOL)shouldInsertCharacter:(const blink::WebKeyboardEvent&)webKeyboardEvent {
+@@ -1189,6 +1194,20 @@ - (void)selectAll:(nullable id)sender {
+   [self handleEditCommands:{"selectAll"}];
+ }
+ 
++// [ios-blink-sideload] Like -selectAll:, for Cmd+C, Cmd+X, Cmd+V and the
++// three-finger editing gestures.
++- (void)copy:(nullable id)sender {
++  [self handleEditCommands:{"copy"}];
++}
++
++- (void)cut:(nullable id)sender {
++  [self handleEditCommands:{"cut"}];
++}
++
++- (void)paste:(nullable id)sender {
++  [self handleEditCommands:{"paste"}];
++}
++
+ - (void)setSelectedTextRange:(UITextRange*)range {
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

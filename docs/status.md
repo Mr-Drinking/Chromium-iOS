@@ -1,6 +1,6 @@
 # 进度与待验证事项
 
-最后更新：2026-10-27（Mac：补丁 0001–0012 和 V8 补丁 0201 在模拟器里验证过，WebAssembly、翻译、系统代理、滚动、滑到底都正常；下载还不能用；真机包也编好了（`dist/Chromium-158.0.8127.0-sideload-3.ipa`），还没在真机上测，也还没发布。Release 2 是 0001–0007 的真机包）。
+最后更新：2026-10-27（Mac：补丁 0001–0016 和 V8 补丁 0201 在模拟器里验证过，WebAssembly、翻译、系统代理、滚动、滑到底、下载、编辑菜单都正常，无痕模式停用；真机包也编好了（`dist/Chromium-158.0.8127.0-sideload-3.ipa`），还没在真机上测，也还没发布。Release 2 是 0001–0007 的真机包）。
 
 **每完成一步、每确认或推翻一条假设，都更新这个文件。** 它是项目的唯一进度记录。
 
@@ -47,7 +47,10 @@
 | 9 | （测试时发现）Blink 版网页请求不走系统代理设置 | **已修**（补丁 0009，模拟器验证过），见风险 15 |
 | 10 | （测试时发现）google.com 只给旧版基础页面 | **已修**（补丁 0010，模拟器验证过）：UA 里的 iOS 版本由 14_0 改成 18_7 |
 | 11 | 网页滑不到底（用户 2026-10-27 提出） | **已修**（补丁 0012，模拟器验证过）：Blink 被告知工具栏能收起，多留了 108 pt 的滚动距离，可工具栏在 Blink 下从不收起。现在能滚到底；工具栏仍然一直显示（正版滚动时会收起，要接进 Chrome 的 fullscreen 逻辑，没做） |
-| 12 | 下载（用户 2026-10-27 让查） | **不能用**，原因已查明：zip 链接、`download` 属性、页面生成的 blob 都没反应，PDF 也打不开（没有 PDF 查看器，会当下载处理）。Blink 版 `ContentBrowserContext::GetDownloadManagerDelegate()` 返回空，content 的下载没有接到 Chrome 的下载界面（`web::DownloadController`）。要修得写一个桥，把 content 的下载包装成 `web::DownloadTask` 交给 Chrome |
+| 12 | 下载（用户 2026-10-27 让查） | **已修**（补丁 0013，模拟器验证过）。原因是 Blink 版 `ContentBrowserContext::GetDownloadManagerDelegate()` 返回空，content 把每个下载的目标路径定成空，等于直接取消。补丁加了一个下载委托，把 content 的下载包装成 `web::DownloadTask` 交给 Chrome 的下载栏。zip 链接、`download` 属性、PDF、页面生成的 blob 都能下载，存到 app 的 Documents 里，和原文件逐字节一致；下载前关掉下载栏、下载中途点"停止"、下载中关掉标签页，传输都会断开，不留半截文件。PDF 不能在网页里直接看（Blink 在 iOS 上没有 PDF 查看器），会当成下载；下载完用"打开方式…"（原来的"打开"会新开标签页再下载一次，已改掉） |
+| 13 | （测试时发现）接实体键盘时，在网页里按 Chrome 的快捷键或 Cmd+C 就闪退 | **已修**（补丁 0014，模拟器验证过）。上游的 `RenderWidgetUIView` 对所有动作都声称能处理，UIKit 就把它没实现的动作也发给它，报 "unrecognized selector"。现在 Cmd+C/X/V 能拷贝、剪切、粘贴，快捷键交还给 Chrome。剩一个小问题：没有功能的 Cmd 组合键（例如无痕停用后的 Cmd+Shift+N）会在网页输入框里打出那个字母（推测是 content 的按键处理没过滤 Cmd 组合键，没细查） |
+| 14 | 编辑菜单（用户 2026-10-27 要求） | **已加**（补丁 0015，模拟器验证过）。原来长按文字只会选中一个词，没有任何菜单，触屏上没法拷贝。现在长按普通文字弹出系统的"拷贝 / 全选"，输入框里是"剪切 / 拷贝 / 粘贴 / 全选"，菜单显示在选中文字上方；"全选"后菜单还在，可以直接拷贝全文；长按链接还是 Chrome 原来的链接菜单。还没有选区拖柄，只能选一个词或全选 |
+| 15 | （测试时发现）打开无痕标签页就闪退（模拟器） | **无痕模式停用**（补丁 0016，模拟器验证过）。单进程模式只支持一个浏览器上下文，见风险 16。现在各处"新建无痕标签页""在无痕模式下打开"都是灰的，标签页网格的无痕页显示"无痕模式不可用 / 您的组织关闭了私密浏览功能"（借用的是企业策略的提示文字，并没有什么组织） |
 
 ## 阶段
 
@@ -84,7 +87,7 @@
 ## 待验证的假设与风险
 
 1. **补丁没编译过。**（2026-10-27 更新：0001–0004 已在模拟器配置下编译通过，验证过；运行时行为还要验证。） 写补丁时已经发现两处 API 漂移（`SysInfo::AmountOfPhysicalMemoryMB` 改成了 `AmountOfTotalPhysicalMemory()`，`--js-flags` 常量挪到了 Blink），还会有。编译报错先查 158 里接口叫什么。
-2. **Chrome + Blink 在单进程下能否跑通。** `ios/web/content` 官方标注为原型（`SECURITY.md`："not currently shipped"）。2024 年 Igalia 列过缺失功能：打印预览、下载、文本选择、请求桌面版网站、文字缩放、翻译、页内查找、触摸事件。现在完成度未知。
+2. **Chrome + Blink 在单进程下能否跑通。** `ios/web/content` 官方标注为原型（`SECURITY.md`："not currently shipped"）。2024 年 Igalia 列过缺失功能：打印预览、下载、文本选择、请求桌面版网站、文字缩放、翻译、页内查找、触摸事件。（2026-10-27 更新：翻译、下载、文本选择的编辑菜单分别由补丁 0008、0013、0015 补上，触摸被打断的问题由 0011 修好；页内查找、打印预览、请求桌面版网站、文字缩放还没测。另见风险 16。）
 3. **Chrome 这个 app 目标没有打包 BrowserEngineKit 扩展进程。** `ios/chrome/app/BUILD.gn` 在 `use_blink` 时只加了权限文件，没有像 `content/shell/BUILD.gn` 那样打包 `content_process`/`gpu_process`/`network_process` 扩展。推测官方的 Chrome+Blink 本来就跑不起多进程，单进程反而是唯一可行的路。需要在模拟器里确认。（2026-10-27 推翻，验证过：模拟器版和真机版的 `Chromium.app/Extensions/` 里都有 `chrome_content_process`、`chrome_gpu_process`、`chrome_network_process` 三个 .appex，每个只有 84 KB，代码都在 `chrome_framework` 里。单进程模式下它们不会被启动，模拟器里的日志可以确认；`05-package-ipa.sh` 打包时会把它们删掉，侧载时就不用多占 App ID。）
 4. **BrowserEngineKit 的文本输入类在没有权限时是否可用。** `RenderWidgetUIView` 采用 `BETextInput` 协议。Blinker Fluid 在 iOS 17.4 以上用的就是这套，说明大概率可用；如果输入法异常，Blinker 有一个 1240 行的 UITextInput 替代实现（`render_widget_host_view_ios_uiview.mm`，分类里归在 legacy）可以参考。
 5. **地址空间。** 侧载 app 未必拿得到 extended-virtual-addressing。`args/device.gn` 已关掉 V8 沙箱和 Oilpan caged heap；如果仍有大块预留失败，需要 memory 类补丁（PartitionAlloc 小内存池等）。
@@ -98,6 +101,7 @@
 13. **免 JIT 时没有 WebAssembly。**（2026-10-27 已修，见 V8 补丁 0201 和日志。）V8 的 Wasm 解释器 DrumBrake 在固定版本的 V8（`f7be3c62`）上编不过，V8 2026-10-26 的 main（`3c21887f`）、2026-10-27 的 main 也一样（验证过）。原因是上游改了接口，DrumBrake 没跟上：`TrustedManaged<T>::raw()` 现在要求传 `DisallowGarbageCollection&`，`TrustedCast<T>` 只允许受信任类型，DrumBrake 却用来转 `Map`、`WasmArray` 等普通对象。上游 CI 显然没编它。V8 补丁 0201 修好了编译；两份 `args/` 开了 `v8_enable_drumbrake` 和 `v8_drumbrake_bounds_checks`，0001 传 `--wasm-jitless`。
 14. **模拟器机型受限。**（2026-10-27 更新：本机另有一个 iOS 27.0 运行时，支持 iPhone 11 到 18 系列，包括 13 mini，`04-run-simulator.sh` 现在会自动挑支持所选机型的运行时；之后的测试都在 "iPhone 13 mini" 上做。）本机 Xcode 27.1 的 iOS 27.1 模拟器运行时只支持 "iPhone Duo" 一种 iPhone（验证过），CI 用的 iPhone 16 和用户手上的 13 mini 都建不出来（"Incompatible device"）。Xcode 27 不再带 Simulator.app，模拟器窗口换成了 `Xcode.app/Contents/Applications/DeviceHub.app`（`com.apple.dt.Devices`，验证过；`04-run-simulator.sh` 会按路径打开它）。要在 13 mini 的屏幕尺寸上测，得另装一个支持它的模拟器运行时（几 GB，要先问用户）。
 15. **网页请求不走系统代理设置。**（2026-10-27，读源码确认，模拟器里也看到了现象。）Blink 版的网页请求走 content 的网络服务，ios/web 没给它传代理设置，于是它退回直连（`services/network/network_context.cc` 里的 `CreateDirect()`）。所以 iOS 里给 Wi-Fi 配的 HTTP 代理、PAC 对网页无效；Clash 等 VPN 型代理（虚拟网卡）对所有流量生效，不受影响。模拟器里同理：Mac 的系统代理不起作用，google.com 打不开，只能开代理软件的虚拟网卡（TUN）模式。**补丁 0009 已修**：iOS 上改读系统代理设置（`ProxyConfigServiceIOS`），之后模拟器里的 Chromium 直接走 Mac 的系统代理（验证过）。
+16. **单进程只支持一个浏览器上下文，所以没有无痕模式。**（2026-10-27，读源码确认，模拟器里复现了。）content 的单进程模式只有一个进程内渲染器，`RenderProcessHostImpl::IsSuitableHost` 在单进程时只用 DCHECK 检查浏览器上下文是否一致。无痕模式要用第二个浏览器上下文：模拟器配置开着 DCHECK，一打开无痕标签页就崩；真机配置不开 DCHECK，推测无痕标签页会和普通标签页共用同一个渲染器进程和绑在它上面的存储（没在真机上试）。补丁 0016 把无痕模式当成被策略停用。要恢复无痕，得有多进程（BrowserEngineKit 权限，侧载拿不到）或者大改 content。
 
 ## 日志
 
@@ -123,3 +127,4 @@
 - 2026-10-27（Mac）：真机版带 DrumBrake 重编（13:25–14:04，V8 整个重编，没有错误），再增量编进 0010、0011（1 分钟，检查过二进制里已是 `iPhone OS 18_7`、带 `--wasm-jitless`）。`05-package-ipa.sh` 打包出 `dist/Chromium-158.0.8127.0-sideload-3.ipa`（后来又增量编进 0012 重新打包：148.5 MB，SHA-256 `8a367c9aa5b4d1f2265a7afda128fe6caee7f5000fade985beb6e1450146e18c`）。模拟器里 app 加载几个网页后的内存占用约 200 MB（`footprint`，峰值 215 MB）。
 - 2026-10-27（Mac）：用户反映网页滑不到底。复现：测试页滚到头 `scrollY` 比最大值少 108 px，最后一个元素在底部工具栏下面。原因是 Blink 版把工具栏写死的可收起高度（顶部 30、底部 78 pt）当浏览器控件报给 Blink，而 Chrome 的工具栏收起逻辑只处理"正在拖动"的滚动，Blink 下永远不触发。补丁 0012 改成报 0，验证过能滚到底、顶部不受影响。接着按用户要求查下载：四种方式都没反应，原因是 Blink 版没有下载管理委托（见"真机反馈的问题"第 12 条）。
 - 2026-10-27（Mac）：用户问补丁能否适配不同的工具栏位置。模拟器里把地址栏移到底部（长按地址栏）后重测：顶部不被挡，能滑到底（验证过）。"隐藏工具栏"时 Chrome 会缩小插入值、网页区域随之变大；滚到页面底部时 Chrome 会自动重新显示工具栏，最后一截照样露得出来。测试中一度以为底部地址栏点不动，临时编了记录命中视图的调试版才查明是 AXe 的坐标问题（见 build-guide.md 的 AXe 一节），调试代码已撤掉。测下载时看到的 `URL.createObjectURL is not a function` 也是测试页写法的问题（`onclick` 属性里 `URL` 指向 `document.URL`），不是 Blink 的问题。
+- 2026-10-27（Mac）：做下载（用户要求先做下载再发布）。新增补丁 0013：Blink 版没有下载委托，content 把每个下载都取消了；补丁把 content 的下载包装成 Chrome 的 `web::DownloadTask`，交给 Chrome 的下载栏（细节见 architecture.md）。模拟器里测了 zip 链接、`download` 属性、PDF、页面生成的 blob：下载栏正常，下载后 Documents 里的文件和原文件 SHA-256 一致；用一个限速的本地服务器（约 100 KB/s）测了下载前关掉下载栏、中途停止、下载中关掉标签页，服务器那边都看到连接在同一秒断开，临时目录里不留文件。测试中发现并处理了三个问题：①PDF 下载完点"打开"会新开标签页、再下载一次（Blink 没有 PDF 查看器），0013 里改成只给"打开方式…"；②接着测快捷键时发现，焦点在网页上时按 Chrome 的快捷键或 Cmd+C 会闪退（上游 `RenderWidgetUIView` 对所有动作都说能处理），新增补丁 0014；③修好快捷键后，Cmd+Shift+N 打开无痕标签页又崩在单进程的 DCHECK 上（风险 16），新增补丁 0016 停用无痕模式。用户中途要求把编辑菜单加上，新增补丁 0015：长按文字时 Blink 会要上下文菜单，原来只有链接和图片才有菜单，现在对文字弹出系统编辑菜单。四个补丁的测试结果见"真机反馈的问题"第 12–15 条。另外按用户要求把模拟器里测试时攒下的四十多个标签页全关了，之后在同一个标签页里跳转。补丁核对：在临时索引里从 `4558926c` 按 `series` 依次打上 0001–0016，得到的树和开发分支完全一致（没有重跑 `02-apply-patches.sh`，免得刷新文件时间戳引起重编）；重新导出时 0001、0004–0012 逐字节不变，0002、0003 是早期手写的，格式不同、内容等价，没有替换。真机版增量编进 0013–0016（1 分钟，没有错误），重新打包 `dist/Chromium-158.0.8127.0-sideload-3.ipa`（148.5 MB，SHA-256 `4f3f8e90b03df9fb3076438f5a43cd6d60235ffffe46fdf647063a72a77649b4`），替换了之前那个只到 0012、还没发布的包。

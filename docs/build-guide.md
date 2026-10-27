@@ -81,6 +81,8 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 - 网页里的文字不在 AXe 读到的界面结构里，要看网页状态就截图，或者让测试页把要看的数据画在页面顶部。
 - 查 Chrome 网页脚本的问题：Blink 版所有注入脚本都跑在网页自己的 JS 环境里，测试页可以直接检查 `window.__gCrWeb`，还能包一层 `__gCrWeb.callFunctionInGcrWeb`（原生调网页）和 `window.webkitMessageHandler.postMessage`（网页发给原生）把往来记下来（补丁 0008 的翻译问题就是这么查的）。
 - 查触摸和滚动：测试页监听 `touchstart`/`touchmove`/`touchend`/`touchcancel` 和 `scroll`，把计数和 `scrollY` 画在固定的浮层里，再用 `axe swipe --duration 1 --delta 4` 慢拖、`--duration 0.15` 快划（补丁 0011 就是这么查出来的）。
+- 长按：`axe touch -x <x> -y <y> --down --up --delay 1.2`；组合键：`axe key-combo --modifiers 227 --key 6`（Cmd+C；227 是左 Command，225 是左 Shift，字母键码 a=4…z=29，回车是 `axe key 40`）。中文输入法开着时，在地址栏输完网址要按两次回车（第一次只是上屏）。
+- 查下载：下好的文件在 `xcrun simctl get_app_container <udid> <bundle id> data` 下的 `Documents/`，下载中的临时文件在同一目录的 `tmp/downloads/<UUID>/*.crdownload`。测"下载中途"要一个慢的服务器，本地写个每 0.2 秒发 20 KB 的 HTTP 服务就行，它还能记下对方是否中途断开（补丁 0013 就是这么测的）。
 - 模拟器里的 Chromium 走 Mac 的系统代理（补丁 0009），系统代理开着就能打开 Google；需要对照时，`xcrun simctl openurl` 打开 http(s) 网址会用模拟器里的 Safari。
 
 ## 4. 真机
@@ -135,8 +137,8 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.i
 
 1. 在 `~/chromium/src` 的 `ios-blink-sideload` 分支上直接改代码、编译、测试。
 2. 修改完提交到对应补丁的 commit（`git commit --fixup` 加 `git rebase -i --autosquash`，或新开一个 commit 作为新补丁）。
-3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 4558926c..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。V8 的补丁（`patches/v8/`）在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `f7be3c62`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index f7be3c62..HEAD -o /tmp/new-v8-patches`，文件名按 `v8/0201-…` 起。
-4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。
+3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 4558926c..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变；早期手写的 0002、0003 例外，格式不同、内容等价，别替换），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。V8 的补丁（`patches/v8/`）在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `f7be3c62`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index f7be3c62..HEAD -o /tmp/new-v8-patches`，文件名按 `v8/0201-…` 起。
+4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。只想核对 `patches/` 和分支是否一致时，也可以不碰工作区（重置分支会刷新补丁涉及文件的时间戳，引起不少重编）：设一个临时的 `GIT_INDEX_FILE`，`git read-tree 4558926c` 后按 `series` 依次 `git apply --cached`，再比较 `git write-tree` 和 `git rev-parse 'ios-blink-sideload^{tree}'`。
 5. 更新 `docs/status.md`，提交本仓库。
 
 补丁正文里统一用 `[ios-blink-sideload]` 标注改动，方便 `git grep` 找到。

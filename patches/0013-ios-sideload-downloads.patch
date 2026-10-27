@@ -1,0 +1,600 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 15:59:41 +0800
+Subject: [PATCH] iOS sideload: hand Blink's downloads to Chrome's download UI
+
+ContentBrowserContext had no DownloadManagerDelegate, so content gave
+every download an empty target path, which cancels it: a link to a file,
+or to a PDF (which Blink on iOS cannot display), did nothing.
+
+Add a delegate that wraps each download in a ContentDownloadTask, a
+web::DownloadTask that Chrome's download bar shows and runs like a
+WKWebView download. When the user taps Download, the task hands the
+path Chrome picked to content as the download target, and it reports
+content's progress back. Dismissing the bar, stopping the download or
+closing the tab cancels it in content. DownloadControllerImpl gets a
+public entry point for such tasks. The delegate detaches itself from
+content's download manager when destroyed, since content::BrowserContext
+shuts the manager down after ContentBrowserContext's members are gone.
+
+For a finished PDF, Chrome offers "Open", which loads the file in a new
+tab. Blink has no PDF viewer, so that tab only downloaded the file
+again; with Blink, offer "Open in..." for PDFs as for other files.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator. A link
+to a ZIP file, a link with a download attribute, a link to a PDF and a
+download of a page-generated blob each show Chrome's download bar, and
+after Download the file in Documents matches the original byte for
+byte. Dismissing the bar before Download, stopping a download midway
+and closing its tab each end the transfer (the test server sees the
+connection close) and leave no partial file. "Open in..." shows the
+share sheet, also for a PDF. Not tested on a device yet.
+
+diff --git a/ios/chrome/browser/download/coordinator/BUILD.gn b/ios/chrome/browser/download/coordinator/BUILD.gn
+index a7563904bdaa2142fedeb2323cf2969a41c02cf1..af587b377e21f9997477116b1a8dd3fe79a8af2b 100644
+--- a/ios/chrome/browser/download/coordinator/BUILD.gn
++++ b/ios/chrome/browser/download/coordinator/BUILD.gn
+@@ -34,6 +34,7 @@ source_set("coordinator") {
+ 
+   deps = [
+     "//base",
++    "//build:blink_buildflags",
+     "//components/strings:components_strings_grit",
+     "//ios/chrome/app/strings:ios_strings_grit",
+     "//ios/chrome/browser/download/coordinator/activities",
+diff --git a/ios/chrome/browser/download/coordinator/download_manager_mediator.mm b/ios/chrome/browser/download/coordinator/download_manager_mediator.mm
+index 24ea748a8af7788fe9f22ef1b52ce255687fe1c0..8a504ce1edf7785aeeda958f5ed1a4a59e302546 100644
+--- a/ios/chrome/browser/download/coordinator/download_manager_mediator.mm
++++ b/ios/chrome/browser/download/coordinator/download_manager_mediator.mm
+@@ -14,6 +14,7 @@
+ #import "base/functional/callback_helpers.h"
+ #import "base/strings/string_number_conversions.h"
+ #import "base/strings/sys_string_conversions.h"
++#import "build/blink_buildflags.h"
+ #import "ios/chrome/browser/download/model/document_download_tab_helper.h"
+ #import "ios/chrome/browser/download/model/download_directory_util.h"
+ #import "ios/chrome/browser/download/model/download_manager_tab_helper.h"
+@@ -225,6 +226,12 @@
+   BOOL can_open_file = !document_download_tab_helper
+                             ->IsDownloadTaskCreatedByCurrentTabHelper() &&
+                        filename.MatchesExtension(".pdf");
++#if BUILDFLAG(USE_BLINK)
++  // [ios-blink-sideload] "Open" loads the PDF in a new tab, but Blink on iOS
++  // has no PDF viewer, so the tab would only download the file again. Offer
++  // "Open in..." instead.
++  can_open_file = NO;
++#endif
+   [consumer_ setCanOpenFile:can_open_file];
+ 
+   [consumer_ setState:state];
+diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
+index e394921c6753d06a60814acdad77d653c527d9ae..a2eff5aae23202f334ea0ec4338288b0cb4c80e8 100644
+--- a/ios/web/content/BUILD.gn
++++ b/ios/web/content/BUILD.gn
+@@ -17,6 +17,10 @@ source_set("content") {
+   sources = [
+     "content_browser_context.h",
+     "content_browser_context.mm",
++    "download/content_download_manager_delegate.h",
++    "download/content_download_manager_delegate.mm",
++    "download/content_download_task.h",
++    "download/content_download_task.mm",
+     "js_messaging/content_java_script_feature_manager.h",
+     "js_messaging/content_java_script_feature_manager.mm",
+     "js_messaging/content_java_script_feature_util.h",
+@@ -46,6 +50,7 @@ source_set("content") {
+     ":send_webkit_message_js",
+     "//base",
+     "//build:blink_buildflags",
++    "//components/download/public/common:public",
+     "//components/embedder_support/ios:web_contents_delegate",
+     "//components/javascript_dialogs",
+     "//components/js_injection/browser",
+@@ -54,6 +59,7 @@ source_set("content") {
+     "//ios/web/annotations",
+     "//ios/web/common",
+     "//ios/web/common:user_agent",
++    "//ios/web/download",
+     "//ios/web/find_in_page",
+     "//ios/web/js_features/context_menu",
+     "//ios/web/js_features/error_page",
+@@ -69,6 +75,7 @@ source_set("content") {
+     "//ios/web/public/session/proto:proto_util",
+     "//ios/web/util",
+     "//ios/web/webui",
++    "//net",
+     "//third_party/abseil-cpp:absl",
+   ]
+ }
+diff --git a/ios/web/content/DEPS b/ios/web/content/DEPS
+index b6a8846810658d1fe9d8246918bac64c84f5ebdc..62deeb521d826312867d742fc792c81ae65b0c2d 100644
+--- a/ios/web/content/DEPS
++++ b/ios/web/content/DEPS
+@@ -1,6 +1,7 @@
+ include_rules = [
+   # keep-sorted start
+   "+components/crash/core/common",
++  "+components/download/public/common",
+   "+components/javascript_dialogs",
+   "+components/js_injection",
+   "+content/public/browser",
+diff --git a/ios/web/content/content_browser_context.h b/ios/web/content/content_browser_context.h
+index 902f35e6fbef240687333b51159d22f1625b182c..c0d6fd18a79d6c07918b80a4fec7d144da971bd0 100644
+--- a/ios/web/content/content_browser_context.h
++++ b/ios/web/content/content_browser_context.h
+@@ -5,6 +5,8 @@
+ #ifndef IOS_WEB_CONTENT_CONTENT_BROWSER_CONTEXT_H_
+ #define IOS_WEB_CONTENT_CONTENT_BROWSER_CONTEXT_H_
+ 
++#import <memory>
++
+ #import "base/memory/raw_ptr.h"
+ #import "build/blink_buildflags.h"
+ #import "content/public/browser/browser_context.h"
+@@ -21,6 +23,7 @@ class BrowserContext;
+ namespace web {
+ 
+ class BrowserContextHolder;
++class ContentDownloadManagerDelegate;
+ 
+ // Wraps a web::BrowserState. The lifetime of instances is tied to that
+ // of the corresponding ContentBrowserContext (via SharedUserData).
+@@ -71,6 +74,8 @@ class ContentBrowserContext : public content::BrowserContext {
+   void InitWhileIOAllowed();
+   void FinishInitWhileIOAllowed();
+   raw_ptr<web::BrowserState> browser_state_ = nullptr;
++  // [ios-blink-sideload] Hands content's downloads to Chrome's download UI.
++  std::unique_ptr<ContentDownloadManagerDelegate> download_manager_delegate_;
+ };
+ 
+ }  // namespace web
+diff --git a/ios/web/content/content_browser_context.mm b/ios/web/content/content_browser_context.mm
+index 5bf95c033a5e049318cbfbe9df4c5eb79b995a9a..06231782a04e0a7d7d7fe06865b968cc1a2f4655 100644
+--- a/ios/web/content/content_browser_context.mm
++++ b/ios/web/content/content_browser_context.mm
+@@ -7,6 +7,7 @@
+ #import <Foundation/Foundation.h>
+ 
+ #import "base/strings/sys_string_conversions.h"
++#import "ios/web/content/download/content_download_manager_delegate.h"
+ #import "ios/web/public/thread/web_task_traits.h"
+ #import "ios/web/public/thread/web_thread.h"
+ 
+@@ -76,7 +77,15 @@
+ 
+ content::DownloadManagerDelegate*
+ ContentBrowserContext::GetDownloadManagerDelegate() {
+-  return nullptr;
++  // [ios-blink-sideload] Without a delegate, content dropped every download.
++  if (!download_manager_delegate_) {
++    download_manager_delegate_ =
++        std::make_unique<ContentDownloadManagerDelegate>(browser_state_);
++    // Creating the download manager calls back into this method, which then
++    // returns the delegate created above.
++    download_manager_delegate_->SetDownloadManager(GetDownloadManager());
++  }
++  return download_manager_delegate_.get();
+ }
+ 
+ content::BrowserPluginGuestManager* ContentBrowserContext::GetGuestManager() {
+diff --git a/ios/web/content/download/content_download_manager_delegate.h b/ios/web/content/download/content_download_manager_delegate.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..fe35d53dd3248b7c8791c796bcc4f0eb902672b1
+--- /dev/null
++++ b/ios/web/content/download/content_download_manager_delegate.h
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef IOS_WEB_CONTENT_DOWNLOAD_CONTENT_DOWNLOAD_MANAGER_DELEGATE_H_
++#define IOS_WEB_CONTENT_DOWNLOAD_CONTENT_DOWNLOAD_MANAGER_DELEGATE_H_
++
++#import <cstdint>
++
++#import "base/memory/raw_ptr.h"
++#import "base/memory/scoped_refptr.h"
++#import "content/public/browser/download_manager_delegate.h"
++
++namespace base {
++class SequencedTaskRunner;
++}  // namespace base
++
++namespace content {
++class DownloadManager;
++}  // namespace content
++
++namespace web {
++
++class BrowserState;
++
++// [ios-blink-sideload] Hands every download that content (Blink) starts to
++// Chrome's download UI (web::DownloadController) as a ContentDownloadTask.
++// Without a delegate, content dropped downloads silently.
++class ContentDownloadManagerDelegate : public content::DownloadManagerDelegate {
++ public:
++  explicit ContentDownloadManagerDelegate(BrowserState* browser_state);
++
++  ContentDownloadManagerDelegate(const ContentDownloadManagerDelegate&) =
++      delete;
++  ContentDownloadManagerDelegate& operator=(
++      const ContentDownloadManagerDelegate&) = delete;
++
++  ~ContentDownloadManagerDelegate() override;
++
++  // Sets the download manager that uses this delegate. The manager outlives
++  // the delegate, so the delegate detaches itself from it when destroyed.
++  void SetDownloadManager(content::DownloadManager* download_manager);
++
++  // content::DownloadManagerDelegate:
++  void Shutdown() override;
++  void GetNextId(content::DownloadIdCallback callback) override;
++  bool DetermineDownloadTarget(
++      ::download::DownloadItem* item,
++      ::download::DownloadTargetCallback* callback) override;
++
++ private:
++  raw_ptr<BrowserState> browser_state_;
++  raw_ptr<content::DownloadManager> download_manager_ = nullptr;
++  scoped_refptr<base::SequencedTaskRunner> task_runner_;
++  uint32_t next_id_;
++};
++
++}  // namespace web
++
++#endif  // IOS_WEB_CONTENT_DOWNLOAD_CONTENT_DOWNLOAD_MANAGER_DELEGATE_H_
+diff --git a/ios/web/content/download/content_download_manager_delegate.mm b/ios/web/content/download/content_download_manager_delegate.mm
+new file mode 100644
+index 0000000000000000000000000000000000000000..e58f2838665850577dcda87109e438e5f482eadf
+--- /dev/null
++++ b/ios/web/content/download/content_download_manager_delegate.mm
+@@ -0,0 +1,85 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "ios/web/content/download/content_download_manager_delegate.h"
++
++#import <memory>
++#import <utility>
++
++#import "base/task/thread_pool.h"
++#import "components/download/public/common/download_item.h"
++#import "components/download/public/common/download_target_info.h"
++#import "content/public/browser/download_item_utils.h"
++#import "content/public/browser/download_manager.h"
++#import "content/public/browser/web_contents.h"
++#import "ios/web/content/download/content_download_task.h"
++#import "ios/web/content/web_state/content_web_state.h"
++#import "ios/web/download/download_controller_impl.h"
++
++namespace web {
++
++ContentDownloadManagerDelegate::ContentDownloadManagerDelegate(
++    BrowserState* browser_state)
++    : browser_state_(browser_state),
++      task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
++          {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})),
++      next_id_(::download::DownloadItem::kInvalidId + 1) {}
++
++ContentDownloadManagerDelegate::~ContentDownloadManagerDelegate() {
++  // content::BrowserContext shuts the download manager down after
++  // ContentBrowserContext has destroyed this delegate.
++  if (download_manager_) {
++    download_manager_->SetDelegate(nullptr);
++  }
++}
++
++void ContentDownloadManagerDelegate::SetDownloadManager(
++    content::DownloadManager* download_manager) {
++  download_manager_ = download_manager;
++}
++
++void ContentDownloadManagerDelegate::Shutdown() {
++  download_manager_ = nullptr;
++}
++
++void ContentDownloadManagerDelegate::GetNextId(
++    content::DownloadIdCallback callback) {
++  std::move(callback).Run(next_id_++);
++}
++
++bool ContentDownloadManagerDelegate::DetermineDownloadTarget(
++    ::download::DownloadItem* item,
++    ::download::DownloadTargetCallback* callback) {
++  // A forced path needs no UI.
++  if (!item->GetForcedFilePath().empty()) {
++    ::download::DownloadTargetInfo target_info;
++    target_info.target_path = item->GetForcedFilePath();
++    target_info.intermediate_path = item->GetForcedFilePath();
++    std::move(*callback).Run(std::move(target_info));
++    return true;
++  }
++
++  // Every WebContents in ios/web/content is created by a ContentWebState,
++  // which is also its delegate.
++  content::WebContents* web_contents =
++      content::DownloadItemUtils::GetWebContents(item);
++  WebState* web_state =
++      web_contents && web_contents->GetDelegate()
++          ? static_cast<ContentWebState*>(web_contents->GetDelegate())
++          : nullptr;
++  auto* controller = static_cast<DownloadControllerImpl*>(
++      DownloadController::FromBrowserState(browser_state_));
++  if (!web_state || !controller->GetDelegate()) {
++    // Nowhere to show the download: an empty target cancels it.
++    std::move(*callback).Run(::download::DownloadTargetInfo());
++    return true;
++  }
++
++  controller->OnContentDownloadCreated(std::make_unique<ContentDownloadTask>(
++      web_state, item, std::move(*callback), task_runner_));
++  return true;
++}
++
++}  // namespace web
+diff --git a/ios/web/content/download/content_download_task.h b/ios/web/content/download/content_download_task.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..f8362aa54f1ca9d3269579a3aa75a84296b7747b
+--- /dev/null
++++ b/ios/web/content/download/content_download_task.h
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef IOS_WEB_CONTENT_DOWNLOAD_CONTENT_DOWNLOAD_TASK_H_
++#define IOS_WEB_CONTENT_DOWNLOAD_CONTENT_DOWNLOAD_TASK_H_
++
++#import <string>
++
++#import "base/functional/callback.h"
++#import "base/memory/raw_ptr.h"
++#import "base/memory/scoped_refptr.h"
++#import "components/download/public/common/download_item.h"
++#import "components/download/public/common/download_target_info.h"
++#import "ios/web/download/download_task_impl.h"
++
++namespace base {
++class SequencedTaskRunner;
++}  // namespace base
++
++namespace web {
++
++class WebState;
++
++// [ios-blink-sideload] A web::DownloadTask for a download that content (Blink)
++// started, so that Chrome's download UI can show and run it. Content fetches
++// the data; this task tells content where to save it once Chrome has picked a
++// path, and reports content's progress back to Chrome.
++class ContentDownloadTask final : public DownloadTaskImpl,
++                                  public ::download::DownloadItem::Observer {
++ public:
++  // `target_callback` is the callback content handed to
++  // DownloadManagerDelegate::DetermineDownloadTarget() for `item`.
++  ContentDownloadTask(
++      WebState* web_state,
++      ::download::DownloadItem* item,
++      ::download::DownloadTargetCallback target_callback,
++      const scoped_refptr<base::SequencedTaskRunner>& task_runner);
++
++  ContentDownloadTask(const ContentDownloadTask&) = delete;
++  ContentDownloadTask& operator=(const ContentDownloadTask&) = delete;
++
++  ~ContentDownloadTask() final;
++
++  // ::download::DownloadItem::Observer:
++  void OnDownloadUpdated(::download::DownloadItem* item) final;
++  void OnDownloadDestroyed(::download::DownloadItem* item) final;
++
++ private:
++  // DownloadTaskImpl:
++  void StartInternal(const base::FilePath& path) final;
++  void CancelInternal() final;
++  std::string GetSuggestedName() const final;
++
++  // Runs `target_callback_` if it has not run yet, with `path` as the target.
++  // An empty `path` makes content cancel the download.
++  void RunTargetCallback(const base::FilePath& path);
++
++  raw_ptr<::download::DownloadItem> item_;
++  ::download::DownloadTargetCallback target_callback_;
++  std::string suggested_name_;
++};
++
++}  // namespace web
++
++#endif  // IOS_WEB_CONTENT_DOWNLOAD_CONTENT_DOWNLOAD_TASK_H_
+diff --git a/ios/web/content/download/content_download_task.mm b/ios/web/content/download/content_download_task.mm
+new file mode 100644
+index 0000000000000000000000000000000000000000..e0a513b5e0ae115656aac56db304bff28379d65f
+--- /dev/null
++++ b/ios/web/content/download/content_download_task.mm
+@@ -0,0 +1,152 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "ios/web/content/download/content_download_task.h"
++
++#import <Foundation/Foundation.h>
++
++#import "base/strings/sys_string_conversions.h"
++#import "base/task/sequenced_task_runner.h"
++#import "ios/web/download/download_result.h"
++#import "net/base/net_errors.h"
++
++namespace web {
++
++namespace {
++
++// The host of the page that started the download, for Chrome's download UI.
++NSString* OriginatingHostForItem(::download::DownloadItem* item) {
++  const GURL& url =
++      item->GetTabUrl().is_valid() ? item->GetTabUrl() : item->GetURL();
++  return base::SysUTF8ToNSString(url.GetHost());
++}
++
++}  // namespace
++
++ContentDownloadTask::ContentDownloadTask(
++    WebState* web_state,
++    ::download::DownloadItem* item,
++    ::download::DownloadTargetCallback target_callback,
++    const scoped_refptr<base::SequencedTaskRunner>& task_runner)
++    : DownloadTaskImpl(web_state,
++                       item->GetURL(),
++                       OriginatingHostForItem(item),
++                       @"GET",
++                       item->GetContentDisposition(),
++                       item->GetTotalBytes() > 0 ? item->GetTotalBytes() : -1,
++                       item->GetMimeType(),
++                       [[NSUUID UUID] UUIDString],
++                       task_runner),
++      item_(item),
++      target_callback_(std::move(target_callback)),
++      suggested_name_(item->GetSuggestedFilename()) {
++  item_->AddObserver(this);
++}
++
++ContentDownloadTask::~ContentDownloadTask() {
++  // Stop observing first: Chrome is destroying this task, so content's
++  // reaction to the cancellation below must not reach Chrome through it.
++  if (item_) {
++    item_->RemoveObserver(this);
++  }
++  // Chrome dropped the task (the user dismissed it, or a policy refused it)
++  // or the download is still running: make content cancel it.
++  if (target_callback_) {
++    RunTargetCallback(base::FilePath());
++  } else if (item_ &&
++             item_->GetState() == ::download::DownloadItem::IN_PROGRESS) {
++    item_->Cancel(/*user_cancel=*/true);
++  }
++}
++
++void ContentDownloadTask::OnDownloadUpdated(::download::DownloadItem* item) {
++  DCHECK_EQ(item, item_);
++  // Before Chrome starts the task, content may already be fetching data; the
++  // task only reports progress once it is running.
++  if (state_ != State::kInProgress) {
++    return;
++  }
++
++  received_bytes_ = item->GetReceivedBytes();
++  if (item->GetTotalBytes() > 0) {
++    total_bytes_ = item->GetTotalBytes();
++  }
++  percent_complete_ = item->PercentComplete();
++
++  switch (item->GetState()) {
++    case ::download::DownloadItem::IN_PROGRESS:
++      DownloadTaskImpl::OnDownloadUpdated();
++      break;
++    case ::download::DownloadItem::COMPLETE:
++      percent_complete_ = 100;
++      OnDownloadFinished(DownloadResult(net::OK));
++      break;
++    case ::download::DownloadItem::CANCELLED:
++      OnDownloadFinished(DownloadResult(net::ERR_ABORTED, /*can_retry=*/false));
++      break;
++    case ::download::DownloadItem::INTERRUPTED:
++      // Retrying would mean restarting content's download to a new path, which
++      // this task does not do.
++      OnDownloadFinished(DownloadResult(net::ERR_FAILED, /*can_retry=*/false));
++      break;
++    case ::download::DownloadItem::MAX_DOWNLOAD_STATE:
++      NOTREACHED();
++  }
++}
++
++void ContentDownloadTask::OnDownloadDestroyed(::download::DownloadItem* item) {
++  DCHECK_EQ(item, item_);
++  item_->RemoveObserver(this);
++  item_ = nullptr;
++  if (state_ == State::kInProgress) {
++    OnDownloadFinished(DownloadResult(net::ERR_ABORTED, /*can_retry=*/false));
++  }
++}
++
++void ContentDownloadTask::StartInternal(const base::FilePath& path) {
++  if (!item_ || !target_callback_) {
++    // Content has dropped the download, or this is a retry: the target was
++    // already handed to content and cannot change.
++    OnDownloadFinished(DownloadResult(net::ERR_FAILED, /*can_retry=*/false));
++    return;
++  }
++  RunTargetCallback(path);
++  if (item_) {
++    // Report what content has already fetched (or a quick completion).
++    OnDownloadUpdated(item_);
++  }
++}
++
++void ContentDownloadTask::CancelInternal() {
++  // An empty target makes content cancel a download it has not saved yet.
++  if (target_callback_) {
++    RunTargetCallback(base::FilePath());
++  } else if (item_ &&
++             item_->GetState() == ::download::DownloadItem::IN_PROGRESS) {
++    item_->Cancel(/*user_cancel=*/true);
++  }
++}
++
++std::string ContentDownloadTask::GetSuggestedName() const {
++  return suggested_name_;
++}
++
++void ContentDownloadTask::RunTargetCallback(const base::FilePath& path) {
++  if (!target_callback_) {
++    return;
++  }
++  ::download::DownloadTargetInfo target_info;
++  if (!path.empty()) {
++    target_info.target_path = path;
++    target_info.intermediate_path =
++        path.AddExtension(FILE_PATH_LITERAL(".crdownload"));
++    target_info.display_name = path.BaseName();
++    target_info.mime_type = item_ ? item_->GetMimeType() : std::string();
++    target_info.insecure_download_status =
++        ::download::DownloadItem::InsecureDownloadStatus::SAFE;
++  }
++  std::move(target_callback_).Run(std::move(target_info));
++}
++
++}  // namespace web
+diff --git a/ios/web/download/download_controller_impl.h b/ios/web/download/download_controller_impl.h
+index cfc488b855393a35af8aab166509560d3ad50869..75b6fb8c03445d25660f77c7fb8958ba75ef1ced 100644
+--- a/ios/web/download/download_controller_impl.h
++++ b/ios/web/download/download_controller_impl.h
+@@ -56,6 +56,10 @@ class DownloadControllerImpl : public DownloadController,
+   void SetDelegate(DownloadControllerDelegate* delegate) override;
+   DownloadControllerDelegate* GetDelegate() const override;
+ 
++  // [ios-blink-sideload] Hands a task for a download that content (Blink)
++  // started to the delegate, like the WebKit-backed tasks above.
++  void OnContentDownloadCreated(std::unique_ptr<DownloadTaskImpl> task);
++
+   // DownloadTaskObserver overrides:
+   void OnDownloadDestroyed(DownloadTask* task) override;
+ 
+diff --git a/ios/web/download/download_controller_impl.mm b/ios/web/download/download_controller_impl.mm
+index 0aa1e7a34206f250a971964eee3786ea8160c941..1e65c9ea90decb0142e201bf29d110c6793e448e 100644
+--- a/ios/web/download/download_controller_impl.mm
++++ b/ios/web/download/download_controller_impl.mm
+@@ -107,6 +107,11 @@
+   alive_tasks_.erase(it);
+ }
+ 
++void DownloadControllerImpl::OnContentDownloadCreated(
++    std::unique_ptr<DownloadTaskImpl> task) {
++  OnDownloadCreated(std::move(task));
++}
++
+ void DownloadControllerImpl::OnDownloadCreated(
+     std::unique_ptr<DownloadTaskImpl> task) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 15:59:50 +0800
+Subject: [PATCH] iOS sideload: disable incognito mode
+
+Content's single-process mode supports a single browser context, and
+this build runs Blink in-process. Opening an incognito tab crashed on
+the DCHECK in RenderProcessHostImpl::IsSuitableHost ("Single-process
+mode does not support multiple browser contexts"); without DCHECKs, as
+on devices, the incognito tab would share the regular profile's
+renderer process and the storage bound to it.
+
+Report incognito mode as disabled, the way the IncognitoModeAvailability
+policy does, so that Chrome disables the ways to open it. The link
+context menu's "Open in Incognito" ignored the policy; disable it like
+the other incognito actions. The tab grid's incognito page says the
+organization turned incognito off, which is the policy's wording.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator: before,
+Cmd+Shift+N crashed on the DCHECK. After, it does nothing; "New
+Incognito Tab" in the overflow menu and "Open in Incognito" in the link
+menu are disabled; the tab grid's incognito page says incognito mode is
+unavailable; regular tabs work as before.
+
+diff --git a/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm b/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm
+index 160f09ddcc32c5f4e50eda2c4976d6feb598a589..494cdf984740b8cf0fcbecbdc032075547ea7945 100644
+--- a/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm
++++ b/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm
+@@ -96,11 +96,19 @@ - (UIAction*)actionToOpenInNewIncognitoTabWithBlock:(ProceduralBlock)block {
+   ProceduralBlock completionBlock =
+       [self recordMobileWebContextMenuOpenTabActionWithBlock:block];
+ 
+-  return [self actionWithTitle:l10n_util::GetNSString(
+-                                   IDS_IOS_OPEN_IN_INCOGNITO_ACTION_TITLE)
+-                         image:image
+-                          type:MenuActionType::OpenInNewIncognitoTab
+-                         block:completionBlock];
++  UIAction* action =
++      [self actionWithTitle:l10n_util::GetNSString(
++                                IDS_IOS_OPEN_IN_INCOGNITO_ACTION_TITLE)
++                      image:image
++                       type:MenuActionType::OpenInNewIncognitoTab
++                      block:completionBlock];
++  // [ios-blink-sideload] Like the other incognito actions here: the link
++  // context menu offered "Open in Incognito" even with incognito disabled.
++  if (self.browser &&
++      IsIncognitoModeDisabled(self.browser->GetProfile()->GetPrefs())) {
++    action.attributes = UIMenuElementAttributesDisabled;
++  }
++  return action;
+ }
+ 
+ - (UIAction*)actionToOpenInNewWindowWithURL:(const GURL&)URL
+diff --git a/ios/chrome/browser/policy/model/BUILD.gn b/ios/chrome/browser/policy/model/BUILD.gn
+index b00273b1b7c1078f3210b377723db8eee48d5d86..b4a104e3cb599e95d3aeef722f05381887ededb3 100644
+--- a/ios/chrome/browser/policy/model/BUILD.gn
++++ b/ios/chrome/browser/policy/model/BUILD.gn
+@@ -252,6 +252,7 @@ source_set("policy_util") {
+   ]
+   deps = [
+     "//base",
++    "//build:blink_buildflags",
+     "//components/policy/core/common:common_constants",
+     "//components/prefs",
+   ]
+diff --git a/ios/chrome/browser/policy/model/policy_util.mm b/ios/chrome/browser/policy/model/policy_util.mm
+index 28946da886b266ef2ad56926739e87444ed76829..88ec07a556f6286c7bfd8c26e52df4d6de130976 100644
+--- a/ios/chrome/browser/policy/model/policy_util.mm
++++ b/ios/chrome/browser/policy/model/policy_util.mm
+@@ -6,6 +6,7 @@
+ 
+ #import <Foundation/Foundation.h>
+ 
++#import "build/blink_buildflags.h"
+ #import "components/policy/core/common/policy_loader_ios_constants.h"
+ #import "components/policy/core/common/policy_pref_names.h"
+ #import "components/prefs/pref_service.h"
+@@ -28,10 +29,18 @@ bool IsIncognitoPolicyApplied(PrefService* pref_service) {
+ }
+ 
+ bool IsIncognitoModeDisabled(PrefService* pref_service) {
++#if BUILDFLAG(USE_BLINK)
++  // [ios-blink-sideload] Blink runs in-process here (--single-process), and
++  // content's single-process mode supports a single browser context: an
++  // incognito tab would share the regular profile's renderer process and its
++  // storage, or crash on a DCHECK. Disable incognito as a policy would.
++  return true;
++#else
+   return IsIncognitoPolicyApplied(pref_service) &&
+          pref_service->GetInteger(
+              policy::policy_prefs::kIncognitoModeAvailability) ==
+              static_cast<int>(IncognitoModePrefs::kDisabled);
++#endif
+ }
+ 
+ bool IsIncognitoModeForced(PrefService* pref_service) {
+-- 
+2.54.0 (Apple Git-157)
+
