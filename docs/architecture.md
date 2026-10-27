@@ -199,6 +199,17 @@ content 的单进程模式只有一个进程内渲染器，也只支持一个浏
 
 模拟器里验证过（2026-10-27）：测试页（`prefers-color-scheme`、`color-scheme: light dark`、`matchMedia` 监听）开着时用 `xcrun simctl ui <udid> appearance dark/light` 切换，页面、媒体查询、监听回调、表单控件都立刻跟着变；深色模式下新打开的网页直接是深色。google.com 在同一台模拟器里 Safari 和这里都是浅色（它自己的"深色主题"设置是"已停用"），不是这里的问题。
 
+### 0022 页内查找（`ios/web/content/web_state/crc_find_in_page_controller.mm`、`content_web_state.mm`）
+
+Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页状态能否搜索（`FindInPageManagerImpl::CanSearchContent()` → `WebState::IsFindInteractionSupported()`），Blink 版的 `ContentWebState` 在这几个接口上都是空实现，固定说不能。WKWebView 版里，Chrome 用的是网页视图自带的系统查找栏（`UIFindInteraction`，Safari 也是它），`FindInPageManagerImpl` 通过 `CRWFindInteraction`/`CRWFindSession` 包装来驱动它、轮询结果。
+
+补丁给 Blink 版的网页视图（`CRCWebViewportContainerView`）装上同样的 `UIFindInteraction`，由新类 `CRCFindInPageController` 提供查找会话：一个 `UIFindSession` 子类，把查找栏里的文字交给 content 的查找（`WebContents::Find`，关闭时 `StopFinding`）。Blink 自己高亮所有匹配（黄色，当前项橙色）并滚到当前项；它的回复（`WebContentsObserver::DidReceiveFindReply`，由 `ContentWebState` 转过来）给出匹配数和当前是第几个，会话据此更新 `resultCount`、`highlightedResultIndex`，再调 `updateResultCount` 让查找栏刷新"1/5"。`ContentWebState` 的 `IsFindInteractionSupported()` 改为支持，`SetFindInteractionEnabled()` 创建或移除控制器，`GetFindInteraction()` 返回包装。几处细节：
+
+- 回复按请求 ID 过滤：每次新搜索记下它的请求 ID，更早的回复不再采用（content 可能在 `Find()` 返回前就回复，所以 ID 在回调里记下）；`-1` 表示数值没变。
+- Blink 只能按子串查找，不支持全字匹配，所以从查找栏的选项菜单里去掉"全字匹配"（按动作的标识 `wholeWords`，这是在模拟器里看到的，不是文档写的）；"区分大小写"映射到 `match_case`。
+
+模拟器里验证过（2026-10-27）：菜单项可用，点了弹出系统查找栏（在屏幕键盘上方，Chrome 进入全屏）；测试页上用英文键盘搜"apple"是 1/5，五处都高亮、第一个为当前，和同一台模拟器里的 Safari 一样（用拼音键盘打 apple、再点候选栏里同样的"apple"上屏时，两边都是 2/5：上屏前后搜索词没变，查找栏当成了"下一个"）；下一个、上一个逐个滚到对应位置，5/5 之后回到 1/5；开"区分大小写"后是 1/4；搜页面里没有的词显示 0、按钮变灰；拼音输入的"狐狸"能找到；关闭后高亮清除、工具栏恢复，再打开也正常。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：

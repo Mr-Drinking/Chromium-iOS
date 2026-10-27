@@ -1,0 +1,429 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 22:39:37 +0800
+Subject: [PATCH] iOS sideload: find in page
+
+Find in Page was disabled: Chrome asks the web state whether it can be
+searched, and ContentWebState said no (IsFindInteractionSupported() and
+the rest were stubs). With WKWebView, Chrome uses the web view's system
+find navigator (UIFindInteraction).
+
+Give the Blink web view the same system find navigator, with a find
+session (a UIFindSession subclass) that searches through content's find
+(WebContents::Find, StopFinding). Blink highlights the matches and
+scrolls to the active one; its replies (DidReceiveFindReply) give the
+navigator the match count and which match is active. Blink finds
+substrings only, so the navigator's Whole Words option is removed;
+Match Case works.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator: Chrome's
+"Find in Page" menu item is enabled and shows the system find navigator
+above the on-screen keyboard; "apple" on a test page shows 1/5 with all
+five matches highlighted and the first one active, as in Safari on the
+same simulator (both show 2/5 when the word is typed with the Pinyin
+keyboard and committed from its candidate bar: committing the same text
+moves to the next match); Next and Previous
+move through the matches, scrolling to each, and wrap from 5/5 to 1/5;
+Match Case leaves 1/4; a word that is not on the page shows 0; a
+Chinese word typed with the Pinyin keyboard is found; closing the
+navigator clears the highlights, and Find opens again afterwards.
+
+diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
+index 127a07e2adfdf93edbb2d2638a95f14fafef2ff6..0af63b2bad3c7fc13cd7d1e74f653a88d5b41187 100644
+--- a/ios/web/content/BUILD.gn
++++ b/ios/web/content/BUILD.gn
+@@ -41,6 +41,8 @@ source_set("content") {
+     "web_state/content_web_state.mm",
+     "web_state/content_web_state_builder.h",
+     "web_state/content_web_state_builder.mm",
++    "web_state/crc_find_in_page_controller.h",
++    "web_state/crc_find_in_page_controller.mm",
+     "web_state/crc_web_view_proxy_impl.h",
+     "web_state/crc_web_view_proxy_impl.mm",
+     "web_state/crc_web_viewport_container_view.h",
+diff --git a/ios/web/content/DEPS b/ios/web/content/DEPS
+index 62deeb521d826312867d742fc792c81ae65b0c2d..d4439ad3bc2f525d0d2bfc5d27f0d8715468e847 100644
+--- a/ios/web/content/DEPS
++++ b/ios/web/content/DEPS
+@@ -19,6 +19,9 @@ specific_include_rules = {
+   "content_web_state_unittest\\.mm": [
+     "+content/public/test/browser_task_environment.h",
+   ],
++  "crc_find_in_page_controller\\.mm": [
++    "+third_party/blink/public/mojom/frame/find_in_page.mojom.h",
++  ],
+   "run_all_unittests\\.cc": [
+     "+content/public/test/content_test_suite_base.h",
+     "+content/public/test/unittest_test_suite.h",
+diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
+index f9a584f90f974a4bdc5f1e265372830994e5485e..77cf532344460bb65c20594eaad510dc5ba7cf8e 100644
+--- a/ios/web/content/web_state/content_web_state.h
++++ b/ios/web/content/web_state/content_web_state.h
+@@ -24,6 +24,7 @@
+ #import "ios/web/public/web_state.h"
+ #import "ios/web/public/web_state_id.h"
+ 
++@class CRCFindInPageController;
+ @class CRCWebViewportContainerView;
+ @class CRWWebViewProxy;
+ 
+@@ -203,6 +204,11 @@ class ContentWebState : public WebState,
+       content::RenderFrameHost::LifecycleState new_state) override;
+   void PrimaryMainFrameRenderProcessGone(
+       base::TerminationStatus status) override;
++  void DidReceiveFindReply(int request_id,
++                           int number_of_matches,
++                           const gfx::Rect& selection_rect,
++                           int active_match_ordinal,
++                           bool final_update) override;
+ 
+   // WebContentsDelegate
+   content::WebContents* AddNewContents(
+@@ -252,6 +258,8 @@ class ContentWebState : public WebState,
+ 
+   raw_ptr<WebStateDelegate> delegate_ = nullptr;
+   CRCWebViewportContainerView* web_view_;
++  // [ios-blink-sideload] Find in Page, while it is enabled.
++  CRCFindInPageController* find_in_page_controller_;
+   std::unique_ptr<SerializedState> serialized_state_;
+   std::unique_ptr<content::WebContents> web_contents_;
+   std::unique_ptr<content::WebContents> child_web_contents_;
+diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
+index cd069d418751a900a74a4a3cbfadad6da37436a7..37338cbeb969522febe898f96c62ceecf57306b8 100644
+--- a/ios/web/content/web_state/content_web_state.mm
++++ b/ios/web/content/web_state/content_web_state.mm
+@@ -20,10 +20,12 @@
+ #import "ios/web/content/content_browser_context.h"
+ #import "ios/web/content/navigation/content_navigation_context.h"
+ #import "ios/web/content/web_state/content_web_state_builder.h"
++#import "ios/web/content/web_state/crc_find_in_page_controller.h"
+ #import "ios/web/content/web_state/crc_web_view_proxy_impl.h"
+ #import "ios/web/content/web_state/crc_web_viewport_container_view.h"
+ #import "ios/web/public/content_type_util.h"
+ #import "ios/web/public/favicon/favicon_url.h"
++#import "ios/web/public/find_in_page/crw_find_interaction.h"
+ #import "ios/web/public/navigation/navigation_item.h"
+ #import "ios/web/public/navigation/navigation_util.h"
+ #import "ios/web/public/navigation/web_state_policy_decider.h"
+@@ -552,18 +554,47 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+     id<CRWWebViewDownloadDelegate> delegate,
+     void (^handler)(id<CRWWebViewDownload>)) {}
+ 
++// [ios-blink-sideload] Find in Page, with the system find navigator searching
++// through content's find (see CRCFindInPageController). This said it was not
++// supported, so Chrome disabled Find in Page.
+ bool ContentWebState::IsFindInteractionSupported() {
+-  return false;
++  return true;
+ }
+ 
+ bool ContentWebState::IsFindInteractionEnabled() {
+-  return false;
++  return find_in_page_controller_ != nil;
+ }
+ 
+-void ContentWebState::SetFindInteractionEnabled(bool enabled) {}
++void ContentWebState::SetFindInteractionEnabled(bool enabled) {
++  if (enabled == IsFindInteractionEnabled()) {
++    return;
++  }
++  if (enabled) {
++    find_in_page_controller_ =
++        [[CRCFindInPageController alloc] initWithWebContents:web_contents_.get()
++                                                        view:web_view_];
++  } else {
++    [find_in_page_controller_ detach];
++    find_in_page_controller_ = nil;
++  }
++}
+ 
+ id<CRWFindInteraction> ContentWebState::GetFindInteraction() {
+-  return nil;
++  if (!find_in_page_controller_) {
++    return nil;
++  }
++  return [[CRWFindInteraction alloc]
++      initWithUIFindInteraction:find_in_page_controller_.findInteraction];
++}
++
++void ContentWebState::DidReceiveFindReply(int request_id,
++                                          int number_of_matches,
++                                          const gfx::Rect& selection_rect,
++                                          int active_match_ordinal,
++                                          bool final_update) {
++  [find_in_page_controller_ didReceiveFindReplyForRequest:request_id
++                                          numberOfMatches:number_of_matches
++                                       activeMatchOrdinal:active_match_ordinal];
+ }
+ 
+ id ContentWebState::GetActivityItem() {
+diff --git a/ios/web/content/web_state/crc_find_in_page_controller.h b/ios/web/content/web_state/crc_find_in_page_controller.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e622ab2771427881d8db93859d48289208b3d6f9
+--- /dev/null
++++ b/ios/web/content/web_state/crc_find_in_page_controller.h
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef IOS_WEB_CONTENT_WEB_STATE_CRC_FIND_IN_PAGE_CONTROLLER_H_
++#define IOS_WEB_CONTENT_WEB_STATE_CRC_FIND_IN_PAGE_CONTROLLER_H_
++
++#import <UIKit/UIKit.h>
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++// [ios-blink-sideload] Find in Page for Blink: the system find navigator
++// (UIFindInteraction), as WKWebView has, searching with content's find
++// (WebContents::Find). Blink highlights the matches and scrolls to the active
++// one; the navigator shows which match it is and how many there are.
++@interface CRCFindInPageController : NSObject
++
++// Adds a find interaction to `view`, searching `webContents`.
++- (instancetype)initWithWebContents:(content::WebContents*)webContents
++                               view:(UIView*)view NS_DESIGNATED_INITIALIZER;
++- (instancetype)init NS_UNAVAILABLE;
++
++@property(nonatomic, readonly) UIFindInteraction* findInteraction;
++
++// Passes on a reply from content's find
++// (WebContentsObserver::DidReceiveFindReply()).
++- (void)didReceiveFindReplyForRequest:(int)requestID
++                      numberOfMatches:(int)numberOfMatches
++                   activeMatchOrdinal:(int)activeMatchOrdinal;
++
++// Dismisses the find navigator and removes the find interaction from its view.
++- (void)detach;
++
++@end
++
++#endif  // IOS_WEB_CONTENT_WEB_STATE_CRC_FIND_IN_PAGE_CONTROLLER_H_
+diff --git a/ios/web/content/web_state/crc_find_in_page_controller.mm b/ios/web/content/web_state/crc_find_in_page_controller.mm
+new file mode 100644
+index 0000000000000000000000000000000000000000..c47d74198861396c061a7b7da865be6ab24ebd59
+--- /dev/null
++++ b/ios/web/content/web_state/crc_find_in_page_controller.mm
+@@ -0,0 +1,217 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "ios/web/content/web_state/crc_find_in_page_controller.h"
++
++#import <string>
++
++#import "base/apple/foundation_util.h"
++#import "base/memory/weak_ptr.h"
++#import "base/strings/sys_string_conversions.h"
++#import "content/public/browser/web_contents.h"
++#import "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
++
++namespace {
++
++// No find session yet, as FindRequestManager::kInvalidId.
++constexpr int kNoSession = -1;
++
++}  // namespace
++
++// A find session of the find navigator, run by content's find.
++@interface CRCFindSession : UIFindSession
++
++- (instancetype)initWithWebContents:
++                    (base::WeakPtr<content::WebContents>)webContents
++                        interaction:(UIFindInteraction*)interaction
++    NS_DESIGNATED_INITIALIZER;
++- (instancetype)init NS_UNAVAILABLE;
++
++- (void)didReceiveFindReplyForRequest:(int)requestID
++                      numberOfMatches:(int)numberOfMatches
++                   activeMatchOrdinal:(int)activeMatchOrdinal;
++
++@end
++
++@implementation CRCFindSession {
++  base::WeakPtr<content::WebContents> _webContents;
++  __weak UIFindInteraction* _interaction;
++  std::u16string _query;
++  BOOL _matchCase;
++  // The request that started the current search. Replies to earlier ones are
++  // stale.
++  int _sessionID;
++  NSInteger _resultCount;
++  NSInteger _highlightedResultIndex;
++}
++
++- (instancetype)initWithWebContents:
++                    (base::WeakPtr<content::WebContents>)webContents
++                        interaction:(UIFindInteraction*)interaction {
++  self = [super init];
++  if (self) {
++    _webContents = webContents;
++    _interaction = interaction;
++    _sessionID = kNoSession;
++    _highlightedResultIndex = NSNotFound;
++  }
++  return self;
++}
++
++- (NSInteger)resultCount {
++  return _resultCount;
++}
++
++- (NSInteger)highlightedResultIndex {
++  return _highlightedResultIndex;
++}
++
++- (BOOL)supportsReplacement {
++  return NO;
++}
++
++- (void)performSearchWithQuery:(NSString*)query
++                       options:(UITextSearchOptions*)options {
++  // Blink finds substrings only, so the word matching options are ignored.
++  _query = base::SysNSStringToUTF16(query);
++  _matchCase =
++      options && !(options.stringCompareOptions & NSCaseInsensitiveSearch);
++  [self clearResults];
++  if (_query.empty()) {
++    [self stopFinding];
++    return;
++  }
++  [self findForward:YES newSession:YES];
++}
++
++- (void)highlightNextResultInDirection:(UITextStorageDirection)direction {
++  if (_query.empty() || _sessionID == kNoSession) {
++    return;
++  }
++  [self findForward:direction == UITextStorageDirectionForward newSession:NO];
++}
++
++- (void)invalidateFoundResults {
++  [self stopFinding];
++  _query.clear();
++  [self clearResults];
++}
++
++- (void)didReceiveFindReplyForRequest:(int)requestID
++                      numberOfMatches:(int)numberOfMatches
++                   activeMatchOrdinal:(int)activeMatchOrdinal {
++  if (_sessionID == kNoSession || requestID < _sessionID) {
++    return;
++  }
++  // -1 means unchanged.
++  if (numberOfMatches != -1) {
++    _resultCount = numberOfMatches;
++  }
++  if (activeMatchOrdinal != -1) {
++    _highlightedResultIndex =
++        activeMatchOrdinal > 0 ? activeMatchOrdinal - 1 : NSNotFound;
++  }
++  [_interaction updateResultCount];
++}
++
++#pragma mark - Private
++
++- (void)findForward:(BOOL)forward newSession:(BOOL)newSession {
++  if (!_webContents) {
++    return;
++  }
++  auto options = blink::mojom::FindOptions::New();
++  options->forward = forward;
++  options->match_case = _matchCase;
++  options->new_session = newSession;
++  // Content can reply before Find() returns, so take the request's ID as soon
++  // as it is known.
++  int* sessionID = &_sessionID;
++  _webContents->Find(_query, std::move(options), /*skip_delay=*/true,
++                     [sessionID, newSession](int requestID) {
++                       if (newSession) {
++                         *sessionID = requestID;
++                       }
++                     });
++}
++
++- (void)stopFinding {
++  _sessionID = kNoSession;
++  if (_webContents) {
++    _webContents->StopFinding(content::STOP_FIND_ACTION_CLEAR_SELECTION);
++  }
++}
++
++- (void)clearResults {
++  _resultCount = 0;
++  _highlightedResultIndex = NSNotFound;
++  [_interaction updateResultCount];
++}
++
++@end
++
++@interface CRCFindInPageController () <UIFindInteractionDelegate>
++@end
++
++@implementation CRCFindInPageController {
++  base::WeakPtr<content::WebContents> _webContents;
++  __weak UIView* _view;
++  // The session of the find navigator, while it shows.
++  CRCFindSession* _session;
++}
++
++- (instancetype)initWithWebContents:(content::WebContents*)webContents
++                               view:(UIView*)view {
++  self = [super init];
++  if (self) {
++    _webContents = webContents->GetWeakPtr();
++    _view = view;
++    _findInteraction = [[UIFindInteraction alloc] initWithSessionDelegate:self];
++    // Blink finds substrings only, so there is no Whole Words option.
++    _findInteraction.optionsMenuProvider =
++        ^UIMenu*(NSArray<UIMenuElement*>* defaultOptions) {
++          NSMutableArray<UIMenuElement*>* options = [NSMutableArray array];
++          for (UIMenuElement* option in defaultOptions) {
++            UIAction* action = base::apple::ObjCCast<UIAction>(option);
++            if (![action.identifier isEqualToString:@"wholeWords"]) {
++              [options addObject:option];
++            }
++          }
++          return [UIMenu menuWithChildren:options];
++        };
++    [view addInteraction:_findInteraction];
++  }
++  return self;
++}
++
++- (void)didReceiveFindReplyForRequest:(int)requestID
++                      numberOfMatches:(int)numberOfMatches
++                   activeMatchOrdinal:(int)activeMatchOrdinal {
++  [_session didReceiveFindReplyForRequest:requestID
++                          numberOfMatches:numberOfMatches
++                       activeMatchOrdinal:activeMatchOrdinal];
++}
++
++- (void)detach {
++  [_findInteraction dismissFindNavigator];
++  [_view removeInteraction:_findInteraction];
++}
++
++#pragma mark - UIFindInteractionDelegate
++
++- (UIFindSession*)findInteraction:(UIFindInteraction*)interaction
++                   sessionForView:(UIView*)view {
++  _session = [[CRCFindSession alloc] initWithWebContents:_webContents
++                                             interaction:interaction];
++  return _session;
++}
++
++- (void)findInteraction:(UIFindInteraction*)interaction
++      didEndFindSession:(UIFindSession*)session {
++  if (session == _session) {
++    _session = nil;
++  }
++}
++
++@end
+-- 
+2.54.0 (Apple Git-157)
+
