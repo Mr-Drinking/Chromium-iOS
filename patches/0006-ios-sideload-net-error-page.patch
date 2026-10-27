@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 11:21:31 +0800
+Subject: [PATCH] iOS sideload: show Chrome's network error page, not
+ placeholder text
+
+IOSContentRendererClient::PrepareErrorPage() filled every failed
+navigation with "This is an error page", so a blocked ad or tracker
+iframe showed a stray line of Times text and a failed page load showed
+nothing useful.
+
+For the main frame, build Chrome's network error page the way
+ios/chrome/browser/web/model/error_page_util.mm does for WebKit
+(LocalizedError::GetPageState() and IDR_NET_ERROR_HTML). A failed
+subframe gets an empty document, as in Safari.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator: a failed
+main-frame load shows the localized "This site can't be reached" page
+with the net error code, and a failed iframe stays blank.
+
+diff --git a/ios/web/content/init/BUILD.gn b/ios/web/content/init/BUILD.gn
+index b27d35da86e092a881a9ba8debc04c44cc9ef188..818981f5f6ff8be6be54621919fd6b105289e148 100644
+--- a/ios/web/content/init/BUILD.gn
++++ b/ios/web/content/init/BUILD.gn
+@@ -29,8 +29,10 @@ source_set("init") {
+     "//build:blink_buildflags",
+     "//components/embedder_support:user_agent",
+     "//components/embedder_support/origin_trials",
++    "//components/error_page/common",
+     "//components/js_injection/renderer",
+     "//components/performance_manager",
++    "//components/resources:components_resources",
+     "//components/version_info",
+     "//content/public/app",
+     "//content/public/browser",
+@@ -40,5 +42,6 @@ source_set("init") {
+     "//ios/web/content/common:non_code_constants",
+     "//ios/web/public",
+     "//ios/web/public/init",
++    "//ui/base",
+   ]
+ }
+diff --git a/ios/web/content/init/DEPS b/ios/web/content/init/DEPS
+index 07c3d8b23eb70b7eb5d02c1b7511d6c048eb3d44..181171727fe59e9eab2b071ca372972a9a85f03e 100644
+--- a/ios/web/content/init/DEPS
++++ b/ios/web/content/init/DEPS
+@@ -1,6 +1,8 @@
+ include_rules = [
+   # keep-sorted start
+   "+components/embedder_support",
++  "+components/error_page/common",
++  "+components/grit/components_resources.h",
+   "+components/performance_manager/embedder",
+   "+components/version_info",
+   "+content/public/app",
+@@ -8,5 +10,8 @@ include_rules = [
+   "+content/public/common",
+   "+content/public/renderer",
+   "+third_party/blink/public/common/switches.h",
++  "+third_party/blink/public/platform/web_url_error.h",
++  "+ui/base/resource/resource_bundle.h",
++  "+ui/base/webui/web_ui_util.h",
+   # keep-sorted end
+ ]
+diff --git a/ios/web/content/init/ios_content_renderer_client.cc b/ios/web/content/init/ios_content_renderer_client.cc
+index daa2e8caa6d2adea6e1b7c56a14bece86febf65c..5c5a3fd6b8c8c0525d95b85167be2c3378c3e028 100644
+--- a/ios/web/content/init/ios_content_renderer_client.cc
++++ b/ios/web/content/init/ios_content_renderer_client.cc
+@@ -4,10 +4,52 @@
+ 
+ #import "ios/web/content/init/ios_content_renderer_client.h"
+ 
++#import <string>
++
++#import "components/error_page/common/error.h"
++#import "components/error_page/common/localized_error.h"
++#import "components/grit/components_resources.h"
+ #import "components/js_injection/renderer/js_communication.h"
++#import "content/public/renderer/render_frame.h"
++#import "content/public/renderer/render_thread.h"
++#import "third_party/blink/public/platform/web_url_error.h"
++#import "ui/base/resource/resource_bundle.h"
++#import "ui/base/webui/web_ui_util.h"
++#import "url/gurl.h"
+ 
+ namespace web {
+ 
++namespace {
++
++// [ios-blink-sideload] Chrome's network error page for the main frame, built
++// the way ios/chrome/browser/web/model/error_page_util.mm builds it for
++// WebKit, instead of placeholder text. A failed subframe (often a blocked ad
++// or tracker) gets an empty document, as in Safari.
++std::string GetErrorPageHtml(content::RenderFrame* render_frame,
++                             const char* error_domain,
++                             int error_code,
++                             const GURL& url,
++                             const std::string& http_method) {
++  if (!render_frame->IsMainFrame()) {
++    return std::string();
++  }
++  error_page::LocalizedError::PageState page_state =
++      error_page::LocalizedError::GetPageState(
++          error_code, error_domain, url, http_method == "POST",
++          /*is_secure_dns_network_error=*/false,
++          /*stale_copy_in_cache=*/false,
++          /*can_show_network_diagnostics_dialog=*/false,
++          /*is_incognito=*/false, /*auto_fetch_feature_enabled=*/false,
++          /*is_kiosk_mode=*/false, content::RenderThread::Get()->GetLocale(),
++          /*is_blocked_by_extension=*/false, /*error_page_params=*/nullptr);
++  std::string template_html =
++      ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++          IDR_NET_ERROR_HTML);
++  return webui::GetLocalizedHtml(template_html, page_state.strings);
++}
++
++}  // namespace
++
+ IOSContentRendererClient::IOSContentRendererClient() = default;
+ IOSContentRendererClient::~IOSContentRendererClient() = default;
+ 
+@@ -47,7 +89,9 @@ void IOSContentRendererClient::PrepareErrorPage(
+         alternative_error_page_info,
+     std::string* error_html) {
+   if (error_html) {
+-    *error_html = "This is an error page";
++    *error_html =
++        GetErrorPageHtml(render_frame, error_page::Error::kNetErrorDomain,
++                         error.reason(), error.url(), http_method);
+   }
+ }
+ 
+@@ -60,7 +104,9 @@ void IOSContentRendererClient::PrepareErrorPageForHttpStatusError(
+         alternative_error_page_info,
+     std::string* error_html) {
+   if (error_html) {
+-    *error_html = "This is an http status error page";
++    *error_html =
++        GetErrorPageHtml(render_frame, error_page::Error::kHttpErrorDomain,
++                         http_status, error.url(), http_method);
+   }
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

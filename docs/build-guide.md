@@ -65,6 +65,19 @@ scripts/04-run-simulator.sh          # 默认 "iPhone 16"，建不出来就自�
 
 想确认补丁生效：日志里能看到 renderer、GPU 都是本进程里的线程，不会尝试启动扩展进程。
 
+### 在模拟器里自动测试（AXe）
+
+没有窗口也能测（验证过）：[AXe](https://github.com/cameroncooke/AXe) 用无障碍和 HID 接口操作模拟器，配合 `DEVELOPER_DIR` 就能用，不需要改 `xcode-select`。
+
+```bash
+brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew install cameroncooke/axe/axe
+```
+
+- `axe describe-ui --udid <udid>`：读界面结构（带无障碍 id 和坐标）；`axe tap --id <id>` / `--label <文字>` / `-x -y`：点击；`axe type '<文字>'`：输入；`axe swipe`：滑动；`axe screenshot --output x.png`：截图。
+- 打开网址最稳的办法：`xcrun simctl openurl <udid> 'chromium://example.com'`（`chromiums://` 是 https），然后 `axe tap --label '打开'` 点系统确认框。直接在地址栏里输入，容易被键盘的自动修正气泡挡住建议行。
+- 模拟器里的 app 能直接访问 Mac 的 `localhost`，本地起个 `python3 -m http.server` 放测试页就行。
+- 注意：AXe 会激活无障碍功能，可能触发只有开 VoiceOver 才会碰到的 bug（补丁 0007 就是这么发现的）。
+
 ## 4. 真机
 
 ```bash

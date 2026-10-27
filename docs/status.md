@@ -32,6 +32,18 @@
 | 网络 | 走本地代理（环境变量 `HTTPS_PROXY` 和 git `http.proxy` 都已设置）；googlesource、GCS、CIPD 都能连通，固定提交在 googlesource 上查得到 |
 | git 配置 | `~/.gitconfig` 里原来有 `git lfs install` 留下的 `filter.lfs.*`（`required = true`），但没装 git-lfs。用户 2026-10-27 自己删掉了（`git config --global --remove-section filter.lfs`）。`scripts/config.sh` 里的覆盖保留着，以防别的机器上也有这种配置 |
 
+## 真机反馈的问题（2026-10-27，用户在 iPhone 13 mini 上测 Release 1）
+
+| # | 问题 | 状态 |
+|---|---|---|
+| 1 | 发热严重 | 查了一部分：模拟器里静止页面 CPU 0.1%，不空转；GPU 光栅化默认开着（`kDefaultEnableGpuRasterization` 在 Apple 平台默认开）。推测主要是免 JIT 的 JS 和单进程跑完整 Chrome 的开销，要在真机上用 Instruments 才能定位 |
+| 2 | 有点卡 | 同上，未定位 |
+| 3 | 网页不用系统字体（SF Pro / SF Mono） | **已修**（补丁 0005，模拟器验证过） |
+| 4 | Passkey 不支持 | 未查。推测 iOS 浏览器用系统通行密钥需要苹果授予的浏览器权限，侧载拿不到 |
+| 5 | 偶尔冒出一行 Times 小字 "This is an error page." | **已修**（补丁 0006，模拟器验证过）。顺带修了一个无障碍崩溃（补丁 0007） |
+| 6 | 滚动条拖不动，样式和原版不一样 | 未修。Blink 自己画移动版叠加滚动条，不是 UIKit 的滚动指示器 |
+| 7 | 没有 WebAssembly | 未修，按用户要求最后做（风险 13） |
+
 ## 阶段
 
 ### 阶段 0：环境与基线
@@ -52,8 +64,8 @@
 ### 阶段 2：真机（iPhone 13 mini，iOS 27）
 - [x] `scripts/03-build.sh device` 编译通过（2026-10-27，05:32–09:09，48153 步，没有错误）
 - [x] `scripts/05-package-ipa.sh` 生成 IPA（2026-10-27：`dist/Chromium-158.0.8127.0-sideload.ipa`，148 MB，arm64，minos 26.0，SDK 27.1，未签名）
-- [ ] 用 Sideloadly / AltStore / SideStore 装上，开发者模式已开
-- [ ] 启动不崩，网页能显示
+- [x] 用 Sideloadly / AltStore / SideStore 装上，开发者模式已开（2026-10-27，用户装了 Release 里的 IPA）
+- [x] 启动不崩，网页能显示（2026-10-27，用户在 iPhone 13 mini / iOS 27 上验证过：**网页能看**。补丁 0002 的进程内显示在真机上有效）
 - [ ] 记录内存表现：重网页、多标签是否被系统杀掉
 
 验收：手机上用免 JIT 模式日常浏览可用。
@@ -79,7 +91,7 @@
 11. **`DEVELOPER_DIR` 能不能传到构建的每一步。**（2026-10-27：能，验证过。系统 `xcode-select` 指向 CLT 的情况下，模拟器版完整编译成功，包括 actool 等 Xcode 工具步骤。） `xcode-select -p`、`xcodebuild`、`xcrun` 都认它（验证过）；gn 生成时的 SDK 探测、siso 在本地执行的 actool/ibtool 等动作是否都继承这个环境变量，还没验证。如果编译时报找不到 Xcode 工具或 SDK，先在 Chromium 的 `src` 里 `git grep DEVELOPER_DIR build/` 看构建怎么处理它；临时改 `xcode-select` 是最后手段，要先问用户。
 12. **本机 Xcode 27.1 比 CI 的 27.0 新。**（2026-10-27：模拟器版编译没有因此出错，验证过。） SDK 小版本不同可能带来少量编译错误。推测概率不高：新版本 SDK 里新加的弃用标记，只有部署目标不低于弃用版本时才会报警告，而这里的部署目标是 26.0。
 13. **免 JIT 时没有 WebAssembly。** V8 的 Wasm 解释器 DrumBrake 在固定版本的 V8（`f7be3c62`）上编不过，V8 2026-10-26 的 main（`3c21887f`）也一样（验证过）。原因是上游改了接口，DrumBrake 没跟上：`Managed<T>::raw()` 现在要求传 `DisallowGarbageCollection&`，`TrustedCast<T>` 只允许受信任类型，DrumBrake 却用来转 `Map`、`WasmArray` 等普通对象。上游 CI 显然没编它。所以先 `v8_enable_drumbrake = false`，补丁 0001 也去掉了 `--wasm-jitless`。以后要 Wasm 有两条路：自己给 DrumBrake 写 V8 补丁（工作量未知），或者等 JIT（风险 7）。
-14. **模拟器机型受限。** 本机 Xcode 27.1 的 iOS 27.1 模拟器运行时只支持 "iPhone Duo" 一种 iPhone（验证过），CI 用的 iPhone 16 和用户手上的 13 mini 都建不出来（"Incompatible device"）。Xcode 27 不再带 Simulator.app，模拟器窗口换成了 `Xcode.app/Contents/Applications/DeviceHub.app`（`com.apple.dt.Devices`，验证过；`04-run-simulator.sh` 会按路径打开它）。要在 13 mini 的屏幕尺寸上测，得另装一个支持它的模拟器运行时（几 GB，要先问用户）。
+14. **模拟器机型受限。**（2026-10-27 更新：本机另有一个 iOS 27.0 运行时，支持 iPhone 11 到 18 系列，包括 13 mini，`04-run-simulator.sh` 现在会自动挑支持所选机型的运行时；之后的测试都在 "iPhone 13 mini" 上做。）本机 Xcode 27.1 的 iOS 27.1 模拟器运行时只支持 "iPhone Duo" 一种 iPhone（验证过），CI 用的 iPhone 16 和用户手上的 13 mini 都建不出来（"Incompatible device"）。Xcode 27 不再带 Simulator.app，模拟器窗口换成了 `Xcode.app/Contents/Applications/DeviceHub.app`（`com.apple.dt.Devices`，验证过；`04-run-simulator.sh` 会按路径打开它）。要在 13 mini 的屏幕尺寸上测，得另装一个支持它的模拟器运行时（几 GB，要先问用户）。
 
 ## 日志
 
@@ -96,3 +108,5 @@
 - 2026-10-27（Mac）：**真机版编译通过**（05:32–09:09，5 路并行，48153 步，没有失败），`05-package-ipa.sh` 第一次实际运行就成功了：`dist/Chromium-158.0.8127.0-sideload.ipa`（148 MB）。打包时发现 Chrome 目标其实打包了 BrowserEngineKit 的三个扩展进程（风险 3 被推翻），脚本已经把它们删掉。还没装到手机上。
 - 2026-10-27（Mac）：应用户要求，把 IPA 放进 GitHub Release。仓库是公开的，所以先建成**草稿 + 预发布**（https://github.com/Mr-Drinking/Chromium-iOS/releases ，标签名 `chromium-158.0.8127.0-sideload-1`，草稿只有仓库管理员能看到）；IPA 的 SHA-256 是 `2a033de2…443a5d`。公开发布前要先确认：许可（README 的"许可"一节）；源码先提交并推送，让标签对上产出这个 IPA 的源码。签名方面查过，这台 Mac 的钥匙串里没有任何代码签名证书、没有描述文件，`devicectl` 也看不到手机。
 - 2026-10-27（Mac）：用户确认公开发布。本轮改动提交后推送到 GitHub，Release `chromium-158.0.8127.0-sideload-1` 改为公开（仍标为预发布），标签指向这次提交，也就是产出这个 IPA 的源码。
+- 2026-10-27（真机，用户测试）：Release 1 的 IPA 装到 iPhone 13 mini（iOS 27）上：**网页能显示**，但①发热严重，②有点卡，③网页不用系统字体了（SF Pro / SF Mono）。接下来在模拟器里查这几个问题（用户同意自己下载测试工具），最后修 DrumBrake。
+- 2026-10-27（Mac）：装了模拟器自动化工具 **AXe**（`brew trust --formula cameroncooke/axe/axe` 后 `brew install`，预编译二进制，配合 `DEVELOPER_DIR` 可用，不用改 `xcode-select`），能在无窗口模拟器上点击、输入、读界面结构、截图。用 iOS 27.0 运行时建了 iPhone 13 mini 模拟器。问题 3（字体）：测试页确认 `system-ui`、`-apple-system`、`BlinkMacSystemFont`、`ui-monospace` 都退回 Times；补丁 0005 修好后与 Safari 并排比较，字距相差 1% 以内。问题 5（错误页）：占位实现在 `ios_content_renderer_client.cc`；补丁 0006 后主页面出错显示正版"无法访问此网站"页，失败的 iframe 为空白。测试时还撞到一个上游崩溃：开着无障碍（AXe 用的就是无障碍接口）时打开出错页面，`-[RenderWidgetUIView accessibilityElements]` 的 WeakPtr CHECK 崩溃，补丁 0007 修好。问题 1、2：静止页面 CPU 0.1%，GPU 光栅化默认开着。0001–0007 从头打上后，开始编真机版。

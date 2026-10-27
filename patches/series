@@ -3,6 +3,9 @@
 0002-ios-sideload-in-process-calayer-display.patch
 0003-ios-sideload-wait-for-metal-device.patch
 0004-ios-sideload-allow-building-without-app-extensions.patch
+0005-ios-sideload-system-fonts.patch
+0006-ios-sideload-net-error-page.patch
+0007-ios-sideload-accessibility-dead-view.patch
 # Optional; applied only with --with-optional, or uncomment to make default.
 # optional/0101-gl-init-failure-without-abort.patch
 # optional/0102-disable-media-capture.patch

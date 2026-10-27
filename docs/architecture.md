@@ -73,6 +73,20 @@ ANGLE 只在 GL 初始化时要一次 Metal 设备，拿到 nil 就整个进程�
 
 纯构建修复，不改运行时代码。`_extension_toolchain` 总会被赋值，但只在各个 `ios_enable_*_extension` 分支里用到。`args/` 把这些扩展全关了（见第 4 节），GN 就报 "Assignment had no effect"，连 `gn gen` 都过不去。补丁加了一行 `not_needed([ "_extension_toolchain" ])`。验证过：没有它 `gn gen` 失败，有了它模拟器和真机两套参数都能生成。
 
+### 0005 网页用系统字体（Blink 字体代码）
+
+Blink 的 iOS 版字体代码只有一个很薄的 `fonts/ios/font_cache_ios.mm`：`system-ui` 在 `FontCache::GetFontPlatformData()` 里被转去 `SystemFontPlatformData()`，而 iOS 上那里没有字体名可用，直接返回空，于是回退成 Times；`BlinkMacSystemFont` 的映射只写在 Mac 专用的代码里；`-apple-system`、`ui-monospace` 这些 Safari 认的写法 Blink 本来就不认。结果网页全都不是系统字体（用户在真机上发现，模拟器里验证过）。
+
+补丁让 iOS 像 Mac 一样把 `system-ui` 当普通字体名创建和缓存，并在 Skia 的 `CreateTypeface()` 里加了 iOS 分支（`MakeIOSSystemFontTypeface()`）：`system-ui`、`ui-sans-serif` → SF Pro，`ui-serif` → New York，`ui-monospace` → SF Mono，`ui-rounded` → SF Rounded，带字重和斜体。用的是 UIKit 的 `UIFontDescriptor` 设计变体，因为 CoreText 的等宽 UI 字体是 Menlo 而不是 SF Mono（在模拟器里实测过）。还要把 SF 的 `opsz` 轴设成字号：Blink 用 HarfBuzz 排字，不设的话会用默认值 28，正文比 Safari 紧约 7%。设了以后与 Safari 的差距在 1% 以内（验证过）。CSS 解析那边把 `-apple-system` 和 `BlinkMacSystemFont` 都当成 `system-ui`，跟 Safari 一样。
+
+### 0006 网络错误页（`ios/web/content/init/ios_content_renderer_client.cc`）
+
+Blink 版 ios/web 的 `PrepareErrorPage()` 是占位实现，任何加载失败都只返回一行 "This is an error page"。网页里被拦掉的广告、统计 iframe 很多，所以用户会"莫名其妙"看到这行 Times 小字。补丁对主页面按 `ios/chrome/browser/web/model/error_page_util.mm`（WebKit 版 Chrome 的做法）生成正版错误页：`error_page::LocalizedError::GetPageState()` 加 `IDR_NET_ERROR_HTML` 模板；子框架则返回空文档，跟 Safari 一样。
+
+### 0007 无障碍查询已销毁的视图时崩溃（上游 bug）
+
+`-[RenderWidgetUIView accessibilityElements]` 没检查弱指针就解引用。导航换掉 `RenderWidgetHostViewIOS` 之后，UIAccessibility 还可能在主队列上回头查询旧的 UIView，于是 WeakPtr 的 `CHECK` 让整个 app 崩溃。只要无障碍功能处于激活状态（VoiceOver、语音控制、UI 自动化）就会碰到。2026-10-27 用 AXe 测试时复现并修好了。
+
 ### 可选补丁
 
 - `optional/0101`：GL 实现为空时记录错误并返回空指针，而不是 `NOTREACHED()`/`CHECK` 直接崩溃。方便看日志。

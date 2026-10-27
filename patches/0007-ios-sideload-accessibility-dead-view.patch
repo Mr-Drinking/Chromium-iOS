@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 11:21:35 +0800
+Subject: [PATCH] iOS sideload: don't crash when UIAccessibility queries a dead
+ view
+
+-[RenderWidgetUIView accessibilityElements] dereferenced its weak
+RenderWidgetHostViewIOS without checking it. UIAccessibility can still
+query the UIView after a navigation has replaced and destroyed its
+RenderWidgetHostViewIOS, and the weak pointer CHECK then aborts the app.
+Anything that turns accessibility on (VoiceOver, Voice Control, UI
+automation) hits it. Return no elements in that case, and when the page
+has no accessibility root yet.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator: loading a
+failing URL with accessibility active crashed in this method before the
+fix and no longer does.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index 122735282a3cf01f936a2943cc8432c66ad6009e..2762f2adf4f2041691117a64a0d731bce923ee40 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -1327,9 +1327,15 @@ - (nullable UITextRange*)characterRangeAtPoint:(CGPoint)point {
+ }
+ 
+ - (NSArray*)accessibilityElements {
++  // [ios-blink-sideload] UIAccessibility can still query this view after its
++  // RenderWidgetHostViewIOS is gone (e.g. right after a navigation swaps the
++  // view), and before the page's accessibility tree has a root.
++  if (!_view) {
++    return nil;
++  }
+   ui::BrowserAccessibilityManager* manager =
+       _view->host()->GetRootBrowserAccessibilityManager();
+-  if (manager) {
++  if (manager && manager->GetBrowserAccessibilityRoot()) {
+     id root =
+         manager->GetBrowserAccessibilityRoot()->GetNativeViewAccessible().Get();
+     if (root) {
+-- 
+2.54.0 (Apple Git-157)
+

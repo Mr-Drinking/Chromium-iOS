@@ -26,17 +26,24 @@ find_sim() {
 
 sim=$(find_sim "$device")
 if [ -z "$sim" ]; then
-  runtime=$(xcrun simctl list runtimes | sed -nE 's/^iOS .* - (com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+)$/\1/p' | tail -1)
-  [ -n "$runtime" ] || die "no iOS simulator runtime installed (Xcode > Settings > Components)"
-  note "creating simulator '$device' on $runtime"
-  if new_udid=$(xcrun simctl create "ios-blink $device" "$device" "$runtime"); then
-    sim="$new_udid ios-blink $device"
+  # Each runtime supports only some device types (Xcode 27.1's iOS 27.1 offers
+  # just "iPhone Duo", its iOS 27.0 the usual iPhones), so pick the newest
+  # available runtime that supports this one.
+  runtime=$(xcrun simctl list runtimes -j | python3 -c '
+import json, sys
+device = sys.argv[1]
+ok = [r for r in json.load(sys.stdin)["runtimes"]
+      if r.get("isAvailable") and r.get("platform") == "iOS"
+      and device in [t["name"] for t in r.get("supportedDeviceTypes", [])]]
+ok.sort(key=lambda r: [int(x) for x in r["version"].split(".")])
+print(ok[-1]["identifier"] if ok else "")' "$device")
+  if [ -n "$runtime" ]; then
+    note "creating simulator '$device' on $runtime"
+    sim="$(xcrun simctl create "ios-blink $device" "$device" "$runtime") ios-blink $device"
   else
-    # A runtime supports only some device types (Xcode 27.1's iOS 27.1 offers
-    # just "iPhone Duo"), so fall back to any available iPhone simulator.
     sim=$(find_sim 'iPhone[^(]*')
-    [ -n "$sim" ] || die "cannot create '$device' on $runtime, and no iPhone simulator is available"
-    note "'$device' is not supported by $runtime; using '${sim#* }' instead"
+    [ -n "$sim" ] || die "no runtime supports '$device', and no iPhone simulator is available"
+    note "no runtime supports '$device'; using '${sim#* }' instead"
   fi
 fi
 udid="${sim%% *}"
