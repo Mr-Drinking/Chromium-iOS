@@ -16,6 +16,7 @@
 0015-ios-sideload-text-edit-menu.patch
 0016-ios-sideload-disable-incognito.patch
 0017-ios-sideload-keyboard-visible-viewport.patch
+0018-ios-sideload-proxy-network-change.patch
 # V8 (src/v8, branched at the v8_revision in src/DEPS).
 src/v8:v8/0201-ios-sideload-fix-drumbrake-build.patch
 # Optional; applied only with --with-optional, or uncomment to make default.

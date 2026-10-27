@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 17:58:29 +0800
+Subject: [PATCH] iOS sideload: re-read the proxy settings when the network
+ changes
+
+ProxyConfigServiceIOS polls the system proxy settings: it re-reads them
+only on a request made at least 10 seconds after the last poll, and that
+request still uses the old settings. Since patch 0009, web pages use
+these settings, so for a while after a VPN app that sets a proxy
+(Shadowrocket, for one) is turned off, requests can still go to its
+proxy, which is gone.
+
+Also listen for the system's network configuration change notification
+(kNotifySCNetworkChange, which turning a VPN on or off posts) and re-read
+the settings at once; polling stays as a fallback. Register when the
+service is first observed rather than when it is created: it must be
+polled on the sequence that uses it, and some instances are created on
+another thread.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator with a
+temporary test build: all five instances (Chrome's and the web pages'
+network contexts) register for the notification, and a test
+notification sent through the same callback path makes each of them
+re-read the settings on its own sequence. A first version that
+registered in the constructor tripped the polling service's thread
+check. The simulator cannot turn a VPN on or off, so the effect on a
+device is not verified yet.
+
+diff --git a/net/proxy_resolution/proxy_config_service_ios.cc b/net/proxy_resolution/proxy_config_service_ios.cc
+index ac26cc6ce5d8b07236c74d8ae8123efd6feabd59..1acd4a6eecdd62ded14467e0f2698bc24f65016d 100644
+--- a/net/proxy_resolution/proxy_config_service_ios.cc
++++ b/net/proxy_resolution/proxy_config_service_ios.cc
+@@ -6,12 +6,16 @@
+ 
+ #include <CFNetwork/CFProxySupport.h>
+ #include <CoreFoundation/CoreFoundation.h>
++#include <dispatch/dispatch.h>
++#include <notify.h>
++#include <notify_keys.h>
+ 
+ #include "base/apple/foundation_util.h"
+ #include "base/apple/scoped_cftyperef.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/strings/sys_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "net/base/proxy_chain.h"
+ #include "net/proxy_resolution/proxy_chain_util_apple.h"
+ #include "net/proxy_resolution/proxy_config_with_annotation.h"
+@@ -107,8 +111,45 @@ ProxyConfigServiceIOS::ProxyConfigServiceIOS(
+     const NetworkTrafficAnnotationTag& traffic_annotation)
+     : PollingProxyConfigService(base::Seconds(kPollIntervalSec),
+                                 base::BindRepeating(GetCurrentProxyConfig),
+-                                traffic_annotation) {}
++                                traffic_annotation),
++      notify_token_(NOTIFY_TOKEN_INVALID) {}
+ 
+-ProxyConfigServiceIOS::~ProxyConfigServiceIOS() = default;
++ProxyConfigServiceIOS::~ProxyConfigServiceIOS() {
++  if (notify_is_valid_token(notify_token_)) {
++    notify_cancel(notify_token_);
++  }
++}
++
++void ProxyConfigServiceIOS::AddObserver(Observer* observer) {
++  PollingProxyConfigService::AddObserver(observer);
++  if (notify_is_valid_token(notify_token_)) {
++    return;
++  }
++  // [ios-blink-sideload] Polling notices a change only on a request at least
++  // kPollIntervalSec after the last poll, so requests made right after a VPN
++  // that sets a proxy is turned off still go to its proxy, which is gone.
++  // Re-read the settings as soon as the system reports a network
++  // configuration change (turning a VPN on or off is one); keep polling as a
++  // fallback. Register here, not in the constructor: the service must be
++  // polled on the sequence that uses it, which is not always the one that
++  // creates it.
++  base::WeakPtr<ProxyConfigServiceIOS> weak_this =
++      weak_ptr_factory_.GetWeakPtr();
++  scoped_refptr<base::SequencedTaskRunner> task_runner =
++      base::SequencedTaskRunner::GetCurrentDefault();
++  notify_register_dispatch(
++      kNotifySCNetworkChange, &notify_token_,
++      dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(int) {
++        task_runner->PostTask(
++            FROM_HERE,
++            base::BindOnce(
++                &ProxyConfigServiceIOS::OnNetworkConfigurationChanged,
++                weak_this));
++      });
++}
++
++void ProxyConfigServiceIOS::OnNetworkConfigurationChanged() {
++  CheckForChangesNow();
++}
+ 
+ }  // namespace net
+diff --git a/net/proxy_resolution/proxy_config_service_ios.h b/net/proxy_resolution/proxy_config_service_ios.h
+index 737ca147f4093ab9bb9c3cf7c94f988695fd5a4c..22184ea8a72dacf710243dd153d839f6a6a079ae 100644
+--- a/net/proxy_resolution/proxy_config_service_ios.h
++++ b/net/proxy_resolution/proxy_config_service_ios.h
+@@ -5,6 +5,7 @@
+ #ifndef NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_IOS_H_
+ #define NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_IOS_H_
+ 
++#include "base/memory/weak_ptr.h"
+ #include "net/proxy_resolution/polling_proxy_config_service.h"
+ 
+ namespace net {
+@@ -19,6 +20,18 @@ class ProxyConfigServiceIOS : public PollingProxyConfigService {
+   ProxyConfigServiceIOS& operator=(const ProxyConfigServiceIOS&) = delete;
+ 
+   ~ProxyConfigServiceIOS() override;
++
++  // PollingProxyConfigService:
++  void AddObserver(Observer* observer) override;
++
++ private:
++  // [ios-blink-sideload] Re-reads the system settings at once.
++  void OnNetworkConfigurationChanged();
++
++  // [ios-blink-sideload] Registration for the system's network configuration
++  // change notification.
++  int notify_token_;
++  base::WeakPtrFactory<ProxyConfigServiceIOS> weak_ptr_factory_{this};
+ };
+ 
+ }  // namespace net
+-- 
+2.54.0 (Apple Git-157)
+

@@ -146,6 +146,14 @@ content 的单进程模式只有一个进程内渲染器，也只支持一个浏
 
 模拟器里验证过（拼音屏幕键盘，测试页记录 `scrollY` 和可视视口）：之前聚焦后可视视口高度为 0，每按一个键页面滚约 420 px；之后可视视口为 314 px（键盘上方的网页视图），聚焦时把输入框滚进视野一次，之后打字、选候选字、收起键盘，页面都不动。键盘弹出时网页的布局视口也会跟着变矮（`innerHeight` 631→314，因为视图被缩小了），和 Safari 只缩可视视口的做法不同，没改。
 
+### 0018 网络变化时立刻重读代理设置（`net/proxy_resolution/proxy_config_service_ios.cc`）
+
+补丁 0009 让网页请求用 Chromium 的 `ProxyConfigServiceIOS` 读系统代理设置。iOS 没有 Mac 上那种代理变化通知（`SCDynamicStore` 在 iOS 上不可用），所以这个服务只能轮询：有请求、而且距上次检查超过 10 秒时才去重读，触发重读的那个请求还用旧设置。关掉 Shadowrocket 这类会设置代理的 VPN 后，接下来一段时间的请求仍会发往已经不存在的代理（推测这就是用户在真机上看到的报错，还没确认）。正版 Chrome 的网页走 WKWebView，由系统处理代理和 VPN，不受影响；Android 版监听系统的 `PROXY_CHANGE` 广播，Mac 版用 `SCDynamicStore` 通知，都是即时的。
+
+补丁让服务在第一次被观察（`AddObserver`）时登记 iOS 的网络配置变化通知（`notify_keys.h` 里的 `kNotifySCNetworkChange`，即 `com.apple.system.config.network_change`，公开接口），一收到就在使用它的线程上调用 `CheckForChangesNow()` 重读；轮询保留作兜底。没有通知时不做任何事，读一次设置也只是在后台线程调一次 `CFNetworkCopySystemProxySettings()`，开销可以忽略。登记放在 `AddObserver` 而不放在构造函数里，是因为有的实例在 UI 线程上创建、却在 IO 线程上使用（`PollingProxyConfigService` 里的 TODO 也提到了），第一版在构造函数里登记，回调发回了 UI 线程，撞上了轮询服务的线程检查（模拟器版开着 DCHECK 直接崩溃，验证过）。
+
+模拟器里验证过（临时测试版）：5 个实例（Chrome 自己的和网页的网络上下文）都登记成功；用同一条回调路径发一个测试通知，每个实例都在自己的线程上重读了设置，没有线程检查报错。模拟器里没法开关 VPN（`simctl spawn` 起的 `notifyutil` 连不上模拟器的通知服务，`com.apple.system.*` 的通知也只有 root 能发），真机上的效果要用户开关 Shadowrocket 来确认。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：
