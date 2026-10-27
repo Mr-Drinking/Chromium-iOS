@@ -111,6 +111,10 @@ Blink 版的网页请求走 content 的网络服务，而 ios/web 从不给它�
 
 Chrome 的下拉动作（刷新、关闭标签页、新标签页）往网页的滚动视图上加了一个 `UIPanGestureRecognizer`。WebKit 下没问题，滚动视图用自己的手势滚动；Blink 下网页是靠收到的原始触摸自己滚动的，那个滚动视图只是镜像 Blink 的偏移。手势一识别（拖动几个点之后），UIKit 就按默认的 `cancelsTouchesInView` 取消这些触摸，Blink 收到 touchcancel，页面就不滚了。`RenderWidgetUIView` 换渲染视图时会把这个滚动视图上的手势全部移除，所以只是"有时候"滚不动，对应用户说的"有点卡"。补丁让 Blink 构建里这个手势不取消、不延迟触摸。下拉动作在 Blink 下本来就触发不了（镜像的偏移不会小于 0），没有损失。模拟器里验证过（记录触摸事件和 `scrollY` 的测试页）：之前拖 400 pt 只收到 touchstart 和 touchcancel，页面不动；之后页面跟手（手指移动 416 px，滚动 421 px），快速一划带惯性滚 955 px；在顶部往下拉也没有异常。
 
+### 0012 不再告诉 Blink 工具栏能收起（`ios/web/content/web_state/content_web_state.mm`）
+
+Blink 版照 Android 的做法，把 Chrome 顶部、底部工具栏能收起的高度当成"浏览器控件"报给 Blink（`GetTopControlsHeight()`、`GetBottomControlsHeight()`，取自 `CRCWebViewportContainerView` 里写死的插入值：顶部 109 - 79 = 30 pt，底部 78 pt）。Blink 于是让网页多滚这么一段，等着工具栏收起后露出来。但工具栏从来不收起：Chrome 的 `FullscreenMediator` 只处理滚动视图"正在被拖动或减速"时的滚动，而 Blink 下那个滚动视图只是程序设置偏移的镜像，`isDragging` 永远是 NO。结果每个网页最后 108 pt 都被底部工具栏挡着，滑不到底（用户在真机上发现）。补丁报 0，Blink 的最大滚动距离就和可见区域一致。工具栏还是一直显示；要让它们像正版那样滚动时收起，得把 Blink 的滚动接进 Chrome 的 fullscreen 逻辑，没做。模拟器里验证过：之前滚到头还差 108 px，最后一个元素在工具栏下面；之后能滚到底、完整露出，顶部也没被挡。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：

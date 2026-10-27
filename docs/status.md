@@ -1,6 +1,6 @@
 # 进度与待验证事项
 
-最后更新：2026-10-27（Mac：补丁 0001–0011 和 V8 补丁 0201 在模拟器里验证过，WebAssembly、翻译、系统代理、滚动都正常；真机包也编好了（`dist/Chromium-158.0.8127.0-sideload-3.ipa`），还没在真机上测，也还没发布。Release 2 是 0001–0007 的真机包）。
+最后更新：2026-10-27（Mac：补丁 0001–0012 和 V8 补丁 0201 在模拟器里验证过，WebAssembly、翻译、系统代理、滚动、滑到底都正常；下载还不能用；真机包也编好了（`dist/Chromium-158.0.8127.0-sideload-3.ipa`），还没在真机上测，也还没发布。Release 2 是 0001–0007 的真机包）。
 
 **每完成一步、每确认或推翻一条假设，都更新这个文件。** 它是项目的唯一进度记录。
 
@@ -46,6 +46,8 @@
 | 8 | 想要网页翻译（用户 2026-10-27 提出） | **已修**（补丁 0008，模拟器验证过）：德语网页会弹出翻译提示，翻译后是中文。需要连得上 Google |
 | 9 | （测试时发现）Blink 版网页请求不走系统代理设置 | **已修**（补丁 0009，模拟器验证过），见风险 15 |
 | 10 | （测试时发现）google.com 只给旧版基础页面 | **已修**（补丁 0010，模拟器验证过）：UA 里的 iOS 版本由 14_0 改成 18_7 |
+| 11 | 网页滑不到底（用户 2026-10-27 提出） | **已修**（补丁 0012，模拟器验证过）：Blink 被告知工具栏能收起，多留了 108 pt 的滚动距离，可工具栏在 Blink 下从不收起。现在能滚到底；工具栏仍然一直显示（正版滚动时会收起，要接进 Chrome 的 fullscreen 逻辑，没做） |
+| 12 | 下载（用户 2026-10-27 让查） | **不能用**，原因已查明：zip 链接、`download` 属性、页面生成的 blob 都没反应，PDF 也打不开（没有 PDF 查看器，会当下载处理）。Blink 版 `ContentBrowserContext::GetDownloadManagerDelegate()` 返回空，content 的下载没有接到 Chrome 的下载界面（`web::DownloadController`）。要修得写一个桥，把 content 的下载包装成 `web::DownloadTask` 交给 Chrome |
 
 ## 阶段
 
@@ -118,4 +120,6 @@
 - 2026-10-27（Mac）：按用户要求查滚动条、Passkey、DrumBrake。滚动条和 Passkey 的结论见"真机反馈的问题"第 4、6 条（用户决定 Passkey 不做，滚动条暂缓）。**DrumBrake**：上游 V8 main 当天的三个解释器文件和固定版本完全一样，也编不过（验证过），所以自己修：新增 V8 补丁 0201（`patches/v8/`，打在 `src/v8` 上），把 `TrustedManaged::raw()` 改成 `unsafe_raw()` / `raw(no_gc)`，把 25 处用在普通堆对象上的 `TrustedCast<>` 改成 `Cast<>`，做法和上游别处一致（细节见 architecture.md）。读源码还发现两件事：① `--jitless` 只在 tvOS 上自动带上 `--wasm-jitless`，iPhone 上要自己传，否则仍然没有 `WebAssembly` 对象，所以 0001 加回了 `--wasm-jitless`（放在最后）；② iOS arm64 上 DrumBrake 默认不做显式边界检查，要靠 V8 的陷阱处理器，而 content 在 iOS 上默认不开它，DrumBrake 会在第一次实例化模块时 `CHECK` 崩溃，所以 `args/` 加了 `v8_drumbrake_bounds_checks = true`（还省掉每块 Wasm 内存 8 GB 的地址空间预留）。对照了 Blinker Fluid 的 wasm 类改动，都不用移植（见 patch-triage.md）。
 - 2026-10-27（Mac）：用户想要网页翻译。读源码发现 Chromium 版翻译被几处挡着：没有 API key 时 `TranslateManager` 直接不提供翻译（但 Google 翻译组件请求时用的是它脚本里自带的 key，下载当时的脚本确认过，所以可以放开）；Blink 版 ios/web 默认根本不注入 Chrome 的网页脚本（`kContentEnableInjectedFeatureScripts` 默认关），而且上游这条 JS 桥只写了一半（`JavaScriptFeature` 的调用在 Blink 下直接返回 false，`ContentWebFrame` 的调用格式也过时了）。新增补丁 0008：只为翻译放行语言检测和翻译两个功能的脚本，并把调用链接通（细节见 architecture.md）。另外发现 Blink 版网页请求不走系统代理设置（风险 15），模拟器里连不上 Google，翻译的最后一步（下载 Google 的翻译脚本）当时没法在模拟器里测；用户建议开代理软件的虚拟网卡模式，但用户不在电脑前，我没有改系统网络设置，后来用补丁 0009 解决（见下一条）。
 - 2026-10-27（Mac）：模拟器里验证了新补丁（新编的 app，从头打补丁后编译，`02-apply-patches.sh` 的结果和开发分支逐字节一致）。**WebAssembly**：测试页 17 项全过（含两个用 clang 编成 wasm32 的 C 程序，结果和 Mac 原生编译的一致），`try_table` 模块报 `CompileError`。**翻译**：先是看不到翻译提示，在测试页里挂钩子查出 JS 桥是通的，提示其实出现了，只是几秒后自动收起；从提示或菜单翻译都正常。**系统代理**（新补丁 0009）：google.com、github.com 都能打开了。google.com 却是旧版基础页面，用 curl 比对出原因是 UA 里冻结的 `iPhone OS 14_0`，新补丁 0010 改成和 iOS 27 的 Safari 一样的 18_7 后显示完整页面。**滚动**：用记录触摸事件的测试页查出，Chrome 下拉刷新的手势会取消网页收到的触摸（touchstart 之后马上 touchcancel），新补丁 0011 修好，页面跟手、带惯性。另外应用户建议在 Chromium 里打开了用户的字体项目页面（GitHub，README 里的 SVG 样张正常），并用这个字体（更纱 Ui PD，可变字体）做了网页字体测试：字重轴、斜体、`pnum`/`tnum`/`zero`、按语言切换的标点都和预期一致；Blink 默认的 `text-spacing-trim` 已经会挤压标点，所以单独开 `chws` 看不出差别；竖排时超过一组的连续破折号（四个 `—`、`⸻⸻`、斜体的 `——⸺`）在接缝处断开，Safari 也一样，强开 `curs`/`calt` 无效，应是字体这边的问题，已告诉用户。
-- 2026-10-27（Mac）：真机版带 DrumBrake 重编（13:25–14:04，V8 整个重编，没有错误），再增量编进 0010、0011（1 分钟，检查过二进制里已是 `iPhone OS 18_7`、带 `--wasm-jitless`）。`05-package-ipa.sh` 打包出 `dist/Chromium-158.0.8127.0-sideload-3.ipa`（148.5 MB，SHA-256 `5f559e49fb7aceb4e264a2923e0d9331959a16f44e2514160108d578dfe549ea`）。模拟器里 app 加载几个网页后的内存占用约 200 MB（`footprint`，峰值 215 MB）。
+- 2026-10-27（Mac）：真机版带 DrumBrake 重编（13:25–14:04，V8 整个重编，没有错误），再增量编进 0010、0011（1 分钟，检查过二进制里已是 `iPhone OS 18_7`、带 `--wasm-jitless`）。`05-package-ipa.sh` 打包出 `dist/Chromium-158.0.8127.0-sideload-3.ipa`（后来又增量编进 0012 重新打包：148.5 MB，SHA-256 `8a367c9aa5b4d1f2265a7afda128fe6caee7f5000fade985beb6e1450146e18c`）。模拟器里 app 加载几个网页后的内存占用约 200 MB（`footprint`，峰值 215 MB）。
+- 2026-10-27（Mac）：用户反映网页滑不到底。复现：测试页滚到头 `scrollY` 比最大值少 108 px，最后一个元素在底部工具栏下面。原因是 Blink 版把工具栏写死的可收起高度（顶部 30、底部 78 pt）当浏览器控件报给 Blink，而 Chrome 的工具栏收起逻辑只处理"正在拖动"的滚动，Blink 下永远不触发。补丁 0012 改成报 0，验证过能滚到底、顶部不受影响。接着按用户要求查下载：四种方式都没反应，原因是 Blink 版没有下载管理委托（见"真机反馈的问题"第 12 条）。
+- 2026-10-27（Mac）：用户问补丁能否适配不同的工具栏位置。模拟器里把地址栏移到底部（长按地址栏）后重测：顶部不被挡，能滑到底（验证过）。"隐藏工具栏"时 Chrome 会缩小插入值、网页区域随之变大；滚到页面底部时 Chrome 会自动重新显示工具栏，最后一截照样露得出来。测试中一度以为底部地址栏点不动，临时编了记录命中视图的调试版才查明是 AXe 的坐标问题（见 build-guide.md 的 AXe 一节），调试代码已撤掉。测下载时看到的 `URL.createObjectURL is not a function` 也是测试页写法的问题（`onclick` 属性里 `URL` 指向 `document.URL`），不是 Blink 的问题。

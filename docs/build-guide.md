@@ -77,6 +77,7 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 - 打开网址最稳的办法：`xcrun simctl openurl <udid> 'chromium://example.com'`（`chromiums://` 是 https），然后 `axe tap --label '打开'` 点系统确认框。直接在地址栏里输入，容易被键盘的自动修正气泡挡住建议行。
 - 模拟器里的 app 能直接访问 Mac 的 `localhost`，本地起个 `python3 -m http.server` 放测试页就行。
 - 注意：AXe 会激活无障碍功能，可能触发只有开 VoiceOver 才会碰到的 bug（补丁 0007 就是这么发现的）。
+- **iPhone 13 mini 模拟器上 AXe 的点击坐标偏大约 4%**：屏幕实际是 360×780 点的分辨率，iOS 却按 375×812 点排版，AXe 按前者换算，`axe tap -x 188 -y 704` 实际落在 (196, 733)，越靠下偏得越多。按坐标点击要先乘 0.96；`describe-ui` 给出的元素坐标是 UIKit 的，不用换算（2026-10-27 用记录命中视图的调试版查明）。
 - 网页里的文字不在 AXe 读到的界面结构里，要看网页状态就截图，或者让测试页把要看的数据画在页面顶部。
 - 查 Chrome 网页脚本的问题：Blink 版所有注入脚本都跑在网页自己的 JS 环境里，测试页可以直接检查 `window.__gCrWeb`，还能包一层 `__gCrWeb.callFunctionInGcrWeb`（原生调网页）和 `window.webkitMessageHandler.postMessage`（网页发给原生）把往来记下来（补丁 0008 的翻译问题就是这么查的）。
 - 查触摸和滚动：测试页监听 `touchstart`/`touchmove`/`touchend`/`touchcancel` 和 `scroll`，把计数和 `scrollY` 画在固定的浮层里，再用 `axe swipe --duration 1 --delta 4` 慢拖、`--duration 0.15` 快划（补丁 0011 就是这么查出来的）。

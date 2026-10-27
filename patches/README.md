@@ -2,7 +2,7 @@
 
 写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
 
-**状态：** 0001–0011 和 V8 补丁 0201 在模拟器和真机两种配置下都编译通过，模拟器里运行、测试过（2026-10-27，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上验证过 0001–0004（用户测试：网页能显示）；0005 以后还没在真机上测过。
+**状态：** 0001–0012 和 V8 补丁 0201 在模拟器和真机两种配置下都编译通过，模拟器里运行、测试过（2026-10-27，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上验证过 0001–0004（用户测试：网页能显示）；0005 以后还没在真机上测过。
 
 | 补丁 | 改动文件 | 作用 |
 |---|---|---|
@@ -17,6 +17,7 @@
 | `0009-ios-sideload-system-proxy.patch` | `services/network/network_context.cc` | 网页请求走系统代理设置（Wi-Fi 的 HTTP 代理、PAC；模拟器里是 Mac 的代理）。原来 ios/web 不给网络服务传代理设置，网页一律直连 |
 | `0010-ios-sideload-user-agent-ios-version.patch` | `components/embedder_support/user_agent_utils{,_unittest}.cc` | UA 里的 iOS 版本从上游冻结的 14_0 改成 18_7（和 iOS 27 的 Safari 一样）；14_0 会让 google.com 等网站给出简陋的旧版页面 |
 | `0011-ios-sideload-overscroll-touch-cancel.patch` | `ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm` | 下拉刷新的手势不再取消网页收到的触摸。原来它一识别，Blink 就收到 touchcancel，页面滚几下就停（"有点卡"） |
+| `0012-ios-sideload-no-collapsible-browser-controls.patch` | `ios/web/content/web_state/content_web_state.mm` | 不再告诉 Blink 工具栏能收起：工具栏在 Blink 下从不收起，Blink 却按能收起多留了 108 pt 的滚动距离，网页滑不到底 |
 | `v8/0201-ios-sideload-fix-drumbrake-build.patch`（打在 `src/v8` 上） | `v8/src/wasm/interpreter/wasm-interpreter{,-runtime,-objects}.cc` | 让 V8 的 Wasm 解释器 DrumBrake 编得过：上游 CI 不编它，它没跟上 `TrustedManaged::raw()` 和 `TrustedCast<>` 的接口改动 |
 | `optional/0101-gl-init-failure-without-abort.patch` | `ui/gl/init/gl_factory_ios.mm` | GL 不可用时记日志、返回空，而不是直接崩溃（排错用） |
 | `optional/0102-disable-media-capture.patch` | `content/browser/renderer_host/media/media_devices_manager.cc`、`media/capture/video/apple/video_capture_device_avfoundation.mm` | 不枚举/不打开摄像头和麦克风（只在 iOS 27 上也因此崩溃时才用） |

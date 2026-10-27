@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 14:36:15 +0800
+Subject: [PATCH] iOS sideload: report no collapsible browser controls to Blink
+
+ContentWebState reports the collapsible part of Chrome's top and bottom
+toolbars to Blink as browser controls (30 pt and 78 pt from the insets
+CRCWebViewportContainerView hard-codes), the way Chrome for Android
+hides its toolbar while scrolling. Blink therefore lets the page scroll
+that much further than its viewport, expecting the controls to collapse
+and reveal the rest. They never do: FullscreenMediator ignores scrolls
+the scroll view is not dragging, and with Blink that scroll view only
+mirrors Blink's offset. So the last 108 pt of every page stayed hidden
+under the bottom toolbar.
+
+Report no collapsible controls, so Blink's maximum scroll offset matches
+the visible area. The toolbars stay as they were; making them collapse
+would need Blink's scrolling wired into Chrome's fullscreen logic.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator with a
+page that shows scrollY and its bottom element: before, scrolling
+stopped 108 px short of the maximum with the last element under the
+toolbar; after, the page scrolls to the maximum, the last element shows
+in full, and nothing is hidden at the top.
+
+diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
+index a131057bb8c15415bc9a722fc36a396a80530d7a..cd069d418751a900a74a4a3cbfadad6da37436a7 100644
+--- a/ios/web/content/web_state/content_web_state.mm
++++ b/ios/web/content/web_state/content_web_state.mm
+@@ -791,11 +791,13 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ }
+ 
+ int ContentWebState::GetTopControlsHeight() {
+-  return ([web_view_ maxViewportInsets].top -
+-          [web_view_ minViewportInsets].top) *
+-         display::Screen::Get()
+-             ->GetDisplayNearestWindow(web_contents_->GetTopLevelNativeWindow())
+-             .device_scale_factor();
++  // [ios-blink-sideload] Chrome's toolbars never collapse over Blink content:
++  // FullscreenMediator ignores scrolls the scroll view is not dragging, and
++  // that scroll view only mirrors Blink's offset. Reporting collapsible
++  // controls makes Blink keep their height as extra scroll range, which then
++  // stays hidden under the toolbar: the bottom of every page (108 pt with the
++  // insets CRCWebViewportContainerView hard-codes) could not be reached.
++  return 0;
+ }
+ 
+ int ContentWebState::GetTopControlsMinHeight() {
+@@ -803,11 +805,8 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ }
+ 
+ int ContentWebState::GetBottomControlsHeight() {
+-  return ([web_view_ maxViewportInsets].bottom -
+-          [web_view_ minViewportInsets].bottom) *
+-         display::Screen::Get()
+-             ->GetDisplayNearestWindow(web_contents_->GetTopLevelNativeWindow())
+-             .device_scale_factor();
++  // [ios-blink-sideload] See GetTopControlsHeight().
++  return 0;
+ }
+ 
+ int ContentWebState::GetBottomControlsMinHeight() {
+-- 
+2.54.0 (Apple Git-157)
+
