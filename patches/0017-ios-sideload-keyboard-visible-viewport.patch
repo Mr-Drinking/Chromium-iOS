@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 17:43:11 +0800
+Subject: [PATCH] iOS sideload: don't count the keyboard twice in the visible
+ viewport
+
+RenderWidgetHostViewIOS took the keyboard's whole height off the visible
+viewport. Chrome, though, already shrinks the web view to end above the
+keyboard: its fullscreen code adds the keyboard to the web view's bottom
+inset, which content applies to the view's frame. With the on-screen
+keyboard up, the visible viewport therefore had no height at all, and
+Blink scrolled the page on every keystroke to reveal the caret: typing
+in a text field moved the page by about a screenful per character.
+
+Take off only the part of the view that the keyboard covers. Whether to
+scroll the focused field into view still depends on the keyboard being
+shown.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator with the
+on-screen Pinyin keyboard and a page that logs scrollY and the visual
+viewport: before, the visual viewport height dropped to 0 and each
+keystroke scrolled the page by about 420 px; after, it is 314 px (the
+web view above the keyboard), the field scrolls into view once when
+focused, and typing, picking a candidate and dismissing the keyboard
+leave the page where it is.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index bf7372c76d3d12f453d0138ef59300e61c3e5b40..d7bda6332c2c17960af0f0a4d4a1b6eba13bbaca 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -362,8 +362,9 @@ bool IsTesting() {
+ 
+ #if !BUILDFLAG(IS_IOS_TVOS)
+ gfx::Size RenderWidgetHostViewIOS::GetVisibleViewportSize() {
++  // [ios-blink-sideload] Only the part of the view the keyboard covers.
+   int bottom_adjust =
+-      std::max(0, static_cast<int>([ui_view_->view_ keyboardHeight]));
++      std::max(0, static_cast<int>([ui_view_->view_ keyboardOverlap]));
+   gfx::Rect requested_rect(GetRequestedRendererSize());
+   requested_rect.Inset(gfx::Insets::TLBR(0, 0, bottom_adjust, 0));
+   return requested_rect.size();
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+index fbff0c5477861bbb38ab363d283ff9a42888ce0a..c83a24a578981656eb97419f4a11de152f689537 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+@@ -45,6 +45,8 @@ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+                     withBounds:(CGRect)bounds;
+ - (void)showKeyboard:(bool)has_text withBounds:(CGRect)bounds;
+ - (CGFloat)keyboardHeight;
++// [ios-blink-sideload] How much of this view the keyboard covers.
++- (CGFloat)keyboardOverlap;
+ 
+ - (BETextInteraction*)textInteraction;
+ - (void)updateView:(UIScrollView*)view;
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index cf45abbecf0ca179a401c6afe04e6b505775dc8d..ebde9180c5f45d4d8bc0d968cca9de50913e51f9 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -4,6 +4,8 @@
+ 
+ #include "content/browser/renderer_host/render_widget_host_view_ios_uiview.h"
+ 
++#include <algorithm>
++
+ #include "base/apple/foundation_util.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "components/input/native_web_keyboard_event.h"
+@@ -367,6 +369,22 @@ - (CGFloat)keyboardHeight {
+   return _keyboardHeight;
+ }
+ 
++- (CGFloat)keyboardOverlap {
++  // [ios-blink-sideload] The embedder may already have shrunk this view to end
++  // above the keyboard: Chrome adds the keyboard to the web view's bottom
++  // inset. Taking the whole keyboard height off the visible viewport again
++  // left it with no height, and Blink then scrolled the page on every
++  // keystroke to reveal the caret.
++  UIWindow* window = self.window;
++  if (!window || _keyboardHeight <= 0) {
++    return 0;
++  }
++  CGFloat keyboardTop = CGRectGetMaxY(window.bounds) - _keyboardHeight;
++  CGFloat viewBottom =
++      CGRectGetMaxY([self convertRect:self.bounds toView:window]);
++  return std::clamp(viewBottom - keyboardTop, CGFloat(0), _keyboardHeight);
++}
++
+ - (void)keyboardWillChangeFrame:(NSNotification*)notification {
+   CHECK(_view);
+   UIWindow* window = self.window;
+-- 
+2.54.0 (Apple Git-157)
+

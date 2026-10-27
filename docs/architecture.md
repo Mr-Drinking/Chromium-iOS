@@ -140,6 +140,12 @@ Blink 版的 `ContentBrowserContext::GetDownloadManagerDelegate()` 返回空。�
 
 content 的单进程模式只有一个进程内渲染器，也只支持一个浏览器上下文：`RenderProcessHostImpl::IsSuitableHost` 在单进程时直接返回"合适"，只用 DCHECK 检查浏览器上下文是否一致。无痕标签页用的是另一个浏览器上下文：模拟器配置开着 DCHECK，一打开就崩（"Single-process mode does not support multiple browser contexts"，验证过）；真机配置不开 DCHECK，推测它会和普通标签页共用同一个渲染器进程和绑在它上面的存储，等于假无痕（没在真机上试）。补丁让 `IsIncognitoModeDisabled()` 在 Blink 构建里总是返回 true，效果和企业策略 `IncognitoModeAvailability` 停用无痕一样：新建无痕标签页、快捷键、从别的 app 用无痕打开等入口都按停用处理（读源码：它们都查这个函数）。链接菜单里的"在无痕模式下打开"原来不看策略（点了没反应），补丁让它和其他无痕动作一样变灰。标签页网格的无痕页显示的是策略停用时的文字"您的组织关闭了私密浏览功能"。模拟器里验证过：Cmd+Shift+N 不再崩溃；溢出菜单的"打开新的无痕式标签页"和链接菜单的"在无痕模式下打开"是灰的；无痕页显示"无痕模式不可用"。
 
+### 0017 键盘弹出时的可见区域（`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`）
+
+屏幕键盘弹出时，Chrome 的工具栏收起逻辑（`FullscreenMediator`）把键盘高度当成网页底部被挡住的部分（`SetKeyboardObscuredInset`），加进网页视图的底部内边距。Blink 版里这个内边距直接决定网页视图的大小，视图被缩到了键盘上方（WebKit 版里同样的内边距只是告诉 WKWebView 哪块被挡住，视图大小不变）。content 的 `RenderWidgetHostViewIOS::GetVisibleViewportSize()` 又按 `RenderWidgetUIView` 自己记下的键盘高度，从可见区域里再减一次，可见区域（`visualViewport.height`）就成了 0。Blink 每次编辑后都要把光标滚进可见区域，区域为 0 时光标永远"看不见"，于是每输一个字页面就滚一屏（用户在真机上发现）。补丁给 `RenderWidgetUIView` 加了 `keyboardOverlap`：只算键盘实际挡住这个视图的那一段（键盘顶边到视图底边），可见区域只减这么多；要不要把焦点输入框滚进视野，仍按键盘是否弹出来判断。这样不管嵌入方有没有先把视图缩小，结果都对。
+
+模拟器里验证过（拼音屏幕键盘，测试页记录 `scrollY` 和可视视口）：之前聚焦后可视视口高度为 0，每按一个键页面滚约 420 px；之后可视视口为 314 px（键盘上方的网页视图），聚焦时把输入框滚进视野一次，之后打字、选候选字、收起键盘，页面都不动。键盘弹出时网页的布局视口也会跟着变矮（`innerHeight` 631→314，因为视图被缩小了），和 Safari 只缩可视视口的做法不同，没改。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：

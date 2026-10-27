@@ -2,7 +2,7 @@
 
 写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
 
-**状态：** 0001–0016 和 V8 补丁 0201 在模拟器和真机两种配置下都编译通过，模拟器里运行、测试过（2026-10-27，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上验证过 0001–0004（用户测试：网页能显示）；0005 以后还没在真机上测过。
+**状态：** 0001–0017 和 V8 补丁 0201 在模拟器和真机两种配置下都编译通过，模拟器里运行、测试过（2026-10-27，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上验证过 0001–0004（用户测试：网页能显示）；0005 以后还没在真机上测过。
 
 | 补丁 | 改动文件 | 作用 |
 |---|---|---|
@@ -22,6 +22,7 @@
 | `0014-ios-sideload-responder-actions.patch` | `content/browser/renderer_host/render_widget_host_view_ios_uiview.mm` | 网页视图只认领自己实现了的响应者动作（原来全部认领，接实体键盘按快捷键或 Cmd+C 就闪退），并补上 `copy:`/`cut:`/`paste:` |
 | `0015-ios-sideload-text-edit-menu.patch` | `ios/web/content/ui/content_context_menu_controller.mm`、`ios/web/content/{BUILD.gn,DEPS}` | 长按文字或输入框时弹出系统编辑菜单（拷贝、剪切、粘贴、全选） |
 | `0016-ios-sideload-disable-incognito.patch` | `ios/chrome/browser/policy/model/{policy_util.mm,BUILD.gn}`、`ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm` | 停用无痕模式：单进程只支持一个浏览器上下文，原来一开无痕标签页就崩（模拟器） |
+| `0017-ios-sideload-keyboard-visible-viewport.patch` | `content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`、`render_widget_host_view_ios_uiview.h` | 可见区域只扣键盘实际挡住网页视图的部分。原来 Chrome 已经把网页视图缩到键盘上方，content 又减了一次键盘高度，可见区域为 0，用屏幕键盘打字时每输一个字网页就滚一屏 |
 | `v8/0201-ios-sideload-fix-drumbrake-build.patch`（打在 `src/v8` 上） | `v8/src/wasm/interpreter/wasm-interpreter{,-runtime,-objects}.cc` | 让 V8 的 Wasm 解释器 DrumBrake 编得过：上游 CI 不编它，它没跟上 `TrustedManaged::raw()` 和 `TrustedCast<>` 的接口改动 |
 | `optional/0101-gl-init-failure-without-abort.patch` | `ui/gl/init/gl_factory_ios.mm` | GL 不可用时记日志、返回空，而不是直接崩溃（排错用） |
 | `optional/0102-disable-media-capture.patch` | `content/browser/renderer_host/media/media_devices_manager.cc`、`media/capture/video/apple/video_capture_device_avfoundation.mm` | 不枚举/不打开摄像头和麦克风（只在 iOS 27 上也因此崩溃时才用） |

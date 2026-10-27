@@ -82,6 +82,7 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 - 查 Chrome 网页脚本的问题：Blink 版所有注入脚本都跑在网页自己的 JS 环境里，测试页可以直接检查 `window.__gCrWeb`，还能包一层 `__gCrWeb.callFunctionInGcrWeb`（原生调网页）和 `window.webkitMessageHandler.postMessage`（网页发给原生）把往来记下来（补丁 0008 的翻译问题就是这么查的）。
 - 查触摸和滚动：测试页监听 `touchstart`/`touchmove`/`touchend`/`touchcancel` 和 `scroll`，把计数和 `scrollY` 画在固定的浮层里，再用 `axe swipe --duration 1 --delta 4` 慢拖、`--duration 0.15` 快划（补丁 0011 就是这么查出来的）。
 - 长按：`axe touch -x <x> -y <y> --down --up --delay 1.2`；组合键：`axe key-combo --modifiers 227 --key 6`（Cmd+C；227 是左 Command，225 是左 Shift，字母键码 a=4…z=29，回车是 `axe key 40`）。中文输入法开着时，在地址栏输完网址要按两次回车（第一次只是上屏）。
+- 测屏幕键盘：AXe 的 `type`/`key` 发的是实体键盘事件，用过之后模拟器就认为接着实体键盘，屏幕键盘不再弹出。要测屏幕键盘，先 `xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool NO`（再把 `AutomaticMinimizationEnabled` 也设成 NO），重启模拟器（`simctl shutdown` 再 `boot`），之后只用点击，按屏幕键盘上的键打字（键的位置从 `describe-ui` 读）。打开网页用 `simctl openurl`，不要在地址栏里用 `axe type`（补丁 0017 就是这么测的）。
 - 查下载：下好的文件在 `xcrun simctl get_app_container <udid> <bundle id> data` 下的 `Documents/`，下载中的临时文件在同一目录的 `tmp/downloads/<UUID>/*.crdownload`。测"下载中途"要一个慢的服务器，本地写个每 0.2 秒发 20 KB 的 HTTP 服务就行，它还能记下对方是否中途断开（补丁 0013 就是这么测的）。
 - 模拟器里的 Chromium 走 Mac 的系统代理（补丁 0009），系统代理开着就能打开 Google；需要对照时，`xcrun simctl openurl` 打开 http(s) 网址会用模拟器里的 Safari。
 
