@@ -1,6 +1,6 @@
 # 进度与待验证事项
 
-最后更新：2026-10-27（Mac 上：**Chrome 模拟器版编译通过，在模拟器里能显示 Chrome 原生界面且不崩溃**；网页渲染还没验证，因为没法点屏幕；真机版正在后台编译，日志在 `/Volumes/Chromium-iOS/chromium/build-logs/`）。
+最后更新：2026-10-27（Mac：补丁 0001–0011 和 V8 补丁 0201 在模拟器里验证过，WebAssembly、翻译、系统代理、滚动都正常；真机包也编好了（`dist/Chromium-158.0.8127.0-sideload-3.ipa`），还没在真机上测，也还没发布。Release 2 是 0001–0007 的真机包）。
 
 **每完成一步、每确认或推翻一条假设，都更新这个文件。** 它是项目的唯一进度记录。
 
@@ -36,13 +36,16 @@
 
 | # | 问题 | 状态 |
 |---|---|---|
-| 1 | 发热严重 | 查了一部分：模拟器里静止页面 CPU 0.1%，不空转；GPU 光栅化默认开着（`kDefaultEnableGpuRasterization` 在 Apple 平台默认开）。推测主要是免 JIT 的 JS 和单进程跑完整 Chrome 的开销，要在真机上用 Instruments 才能定位 |
-| 2 | 有点卡 | 同上，未定位 |
+| 1 | 发热严重 | 查了一部分：模拟器里静止页面 CPU 0.1%，不空转（bilibili 首页加载完也是 0.0–0.1%）；GPU 光栅化默认开着（`kDefaultEnableGpuRasterization` 在 Apple 平台默认开）。2026-10-27 粗测：同一个 bilibili 页面加载 25 秒，Chromium 用了约 5 CPU 秒，模拟器里的 Safari（所有进程合计）约 10 CPU 秒，免 JIT 的 JS 在模拟器里并不显得更费 CPU（数据粗糙；GPU 的工作不算在进程 CPU 里）。日志里每次加载网页都有 `PageContextWrapper execution timed out`，查过源码：是 Chrome 为 AI 功能抽取网页正文，只取文字、不截图，Blink 下相关 JS 调用被挡住，只是等到超时，不是发热原因。最终要在真机上用 Instruments 定位 |
+| 2 | 有点卡 | **找到并修了一个主要原因**（补丁 0011，模拟器验证过）：Chrome 下拉刷新的手势一识别就取消网页收到的触摸，Blink 收到 touchcancel，页面滚几下就停，而且只是"有时候"这样（换渲染视图时这个手势会被移除）。修后页面跟手、带惯性。用 AXe 测：之前 500 pt 的滑动只滚约 30 pt，之后正常。真机上的效果待用户确认 |
 | 3 | 网页不用系统字体（SF Pro / SF Mono） | **已修**（补丁 0005，模拟器验证过） |
-| 4 | Passkey 不支持 | 未查。推测 iOS 浏览器用系统通行密钥需要苹果授予的浏览器权限，侧载拿不到 |
+| 4 | Passkey 不支持 | **不做**（用户 2026-10-27 决定放弃）。读源码确认：Chromium 的通行密钥实现（iCloud 钥匙串）只在 Mac 上编译（`device/fido/BUILD.gn` 里的 `is_mac`），还要求苹果授予的 `com.apple.developer.web-browser.public-key-credential` 权限（`device/fido/mac/icloud_keychain_sys.mm`）。iOS 的 Blink 版没有这部分实现，侧载 app 也拿不到这个权限 |
 | 5 | 偶尔冒出一行 Times 小字 "This is an error page." | **已修**（补丁 0006，模拟器验证过）。顺带修了一个无障碍崩溃（补丁 0007） |
-| 6 | 滚动条拖不动，样式和原版不一样 | 未修。Blink 自己画移动版叠加滚动条，不是 UIKit 的滚动指示器 |
-| 7 | 没有 WebAssembly | 未修，按用户要求最后做（风险 13） |
+| 6 | 滚动条拖不动，样式和原版不一样 | **暂缓**（用户说优先级低）。读源码确认：网页外面那层 `UIScrollView` 只是个镜像，滚动被禁用、手势识别器全被移除（`render_widget_host_view_ios_uiview.mm` 的 `-updateView:`），滚动由 Blink 处理。滚动条是 Blink 画的移动版叠加滚动条，不响应触摸。要换成原生、可拖动的指示条，得隐藏 Blink 的滚动条、显示 UIKit 的，再把拖动转成 Blink 的滚动，不是小改动 |
+| 7 | 没有 WebAssembly | **已修**（V8 补丁 0201 + 0001 的 `--wasm-jitless` + `args/` 开 DrumBrake 并做显式边界检查，模拟器验证过）：测试页 17 项全过，速度和免 JIT 的 JS 相当，比 JIT 慢 4–6 倍；新式异常处理（`try_table`）的模块会报 `CompileError` |
+| 8 | 想要网页翻译（用户 2026-10-27 提出） | **已修**（补丁 0008，模拟器验证过）：德语网页会弹出翻译提示，翻译后是中文。需要连得上 Google |
+| 9 | （测试时发现）Blink 版网页请求不走系统代理设置 | **已修**（补丁 0009，模拟器验证过），见风险 15 |
+| 10 | （测试时发现）google.com 只给旧版基础页面 | **已修**（补丁 0010，模拟器验证过）：UA 里的 iOS 版本由 14_0 改成 18_7 |
 
 ## 阶段
 
@@ -56,7 +59,7 @@
 - [x] 模拟器和真机两套参数的 `gn gen` 都能通过（2026-10-27，需要 0004）
 - [x] `scripts/03-build.sh sim` 编译通过（2026-10-27，5 路并行约 3 小时；补丁本身没碰到 API 漂移，只是得关掉 DrumBrake，见风险 13）
 - [x] `scripts/04-run-simulator.sh` 启动后能看到 Chrome 界面（2026-10-27，验证过：首次引导页和新标签页都正常显示，持续运行不崩溃；第一次启动的崩溃已经在 0001 里修了，见日志）
-- [ ] 能打开网页、滚动、输入文字（地址栏和网页输入框）。怎么点屏幕：模拟器窗口在 DeviceHub 里（Xcode 27 用它取代了 Simulator.app），可以手动操作。Claude 这边的模拟器面板要求系统 `xcode-select` 指向完整的 Xcode（用户不想改）；要让 Claude 自己点，得在 Claude 桌面 app 里打开 Computer Use。另外，用 `simctl openurl chromiums://…` 打开网址会弹出系统确认框
+- [x] 能打开网页、滚动、输入文字（2026-10-27，验证过：在模拟器里用 AXe 操作。打开网页、地址栏输入一直正常；滚动原来常常被打断，补丁 0011 修好；网页输入框能输入，中文拼音输入法的候选和标记文字也正常。怎么在模拟器里自动操作见 build-guide.md 的 AXe 一节）
 - [ ] 记录明显缺失或异常的功能（下载、查找、文本选择、视频等）
 
 验收：模拟器里用 Chrome 界面正常浏览几个常见网站。
@@ -90,8 +93,9 @@
 10. **Google 账号。** Chromium 构建没有 Google API key 和内部组件，登录/同步、Discover、Lens 等大概率不可用。
 11. **`DEVELOPER_DIR` 能不能传到构建的每一步。**（2026-10-27：能，验证过。系统 `xcode-select` 指向 CLT 的情况下，模拟器版完整编译成功，包括 actool 等 Xcode 工具步骤。） `xcode-select -p`、`xcodebuild`、`xcrun` 都认它（验证过）；gn 生成时的 SDK 探测、siso 在本地执行的 actool/ibtool 等动作是否都继承这个环境变量，还没验证。如果编译时报找不到 Xcode 工具或 SDK，先在 Chromium 的 `src` 里 `git grep DEVELOPER_DIR build/` 看构建怎么处理它；临时改 `xcode-select` 是最后手段，要先问用户。
 12. **本机 Xcode 27.1 比 CI 的 27.0 新。**（2026-10-27：模拟器版编译没有因此出错，验证过。） SDK 小版本不同可能带来少量编译错误。推测概率不高：新版本 SDK 里新加的弃用标记，只有部署目标不低于弃用版本时才会报警告，而这里的部署目标是 26.0。
-13. **免 JIT 时没有 WebAssembly。** V8 的 Wasm 解释器 DrumBrake 在固定版本的 V8（`f7be3c62`）上编不过，V8 2026-10-26 的 main（`3c21887f`）也一样（验证过）。原因是上游改了接口，DrumBrake 没跟上：`Managed<T>::raw()` 现在要求传 `DisallowGarbageCollection&`，`TrustedCast<T>` 只允许受信任类型，DrumBrake 却用来转 `Map`、`WasmArray` 等普通对象。上游 CI 显然没编它。所以先 `v8_enable_drumbrake = false`，补丁 0001 也去掉了 `--wasm-jitless`。以后要 Wasm 有两条路：自己给 DrumBrake 写 V8 补丁（工作量未知），或者等 JIT（风险 7）。
+13. **免 JIT 时没有 WebAssembly。**（2026-10-27 已修，见 V8 补丁 0201 和日志。）V8 的 Wasm 解释器 DrumBrake 在固定版本的 V8（`f7be3c62`）上编不过，V8 2026-10-26 的 main（`3c21887f`）、2026-10-27 的 main 也一样（验证过）。原因是上游改了接口，DrumBrake 没跟上：`TrustedManaged<T>::raw()` 现在要求传 `DisallowGarbageCollection&`，`TrustedCast<T>` 只允许受信任类型，DrumBrake 却用来转 `Map`、`WasmArray` 等普通对象。上游 CI 显然没编它。V8 补丁 0201 修好了编译；两份 `args/` 开了 `v8_enable_drumbrake` 和 `v8_drumbrake_bounds_checks`，0001 传 `--wasm-jitless`。
 14. **模拟器机型受限。**（2026-10-27 更新：本机另有一个 iOS 27.0 运行时，支持 iPhone 11 到 18 系列，包括 13 mini，`04-run-simulator.sh` 现在会自动挑支持所选机型的运行时；之后的测试都在 "iPhone 13 mini" 上做。）本机 Xcode 27.1 的 iOS 27.1 模拟器运行时只支持 "iPhone Duo" 一种 iPhone（验证过），CI 用的 iPhone 16 和用户手上的 13 mini 都建不出来（"Incompatible device"）。Xcode 27 不再带 Simulator.app，模拟器窗口换成了 `Xcode.app/Contents/Applications/DeviceHub.app`（`com.apple.dt.Devices`，验证过；`04-run-simulator.sh` 会按路径打开它）。要在 13 mini 的屏幕尺寸上测，得另装一个支持它的模拟器运行时（几 GB，要先问用户）。
+15. **网页请求不走系统代理设置。**（2026-10-27，读源码确认，模拟器里也看到了现象。）Blink 版的网页请求走 content 的网络服务，ios/web 没给它传代理设置，于是它退回直连（`services/network/network_context.cc` 里的 `CreateDirect()`）。所以 iOS 里给 Wi-Fi 配的 HTTP 代理、PAC 对网页无效；Clash 等 VPN 型代理（虚拟网卡）对所有流量生效，不受影响。模拟器里同理：Mac 的系统代理不起作用，google.com 打不开，只能开代理软件的虚拟网卡（TUN）模式。**补丁 0009 已修**：iOS 上改读系统代理设置（`ProxyConfigServiceIOS`），之后模拟器里的 Chromium 直接走 Mac 的系统代理（验证过）。
 
 ## 日志
 
@@ -110,3 +114,8 @@
 - 2026-10-27（Mac）：用户确认公开发布。本轮改动提交后推送到 GitHub，Release `chromium-158.0.8127.0-sideload-1` 改为公开（仍标为预发布），标签指向这次提交，也就是产出这个 IPA 的源码。
 - 2026-10-27（真机，用户测试）：Release 1 的 IPA 装到 iPhone 13 mini（iOS 27）上：**网页能显示**，但①发热严重，②有点卡，③网页不用系统字体了（SF Pro / SF Mono）。接下来在模拟器里查这几个问题（用户同意自己下载测试工具），最后修 DrumBrake。
 - 2026-10-27（Mac）：装了模拟器自动化工具 **AXe**（`brew trust --formula cameroncooke/axe/axe` 后 `brew install`，预编译二进制，配合 `DEVELOPER_DIR` 可用，不用改 `xcode-select`），能在无窗口模拟器上点击、输入、读界面结构、截图。用 iOS 27.0 运行时建了 iPhone 13 mini 模拟器。问题 3（字体）：测试页确认 `system-ui`、`-apple-system`、`BlinkMacSystemFont`、`ui-monospace` 都退回 Times；补丁 0005 修好后与 Safari 并排比较，字距相差 1% 以内。问题 5（错误页）：占位实现在 `ios_content_renderer_client.cc`；补丁 0006 后主页面出错显示正版"无法访问此网站"页，失败的 iframe 为空白。测试时还撞到一个上游崩溃：开着无障碍（AXe 用的就是无障碍接口）时打开出错页面，`-[RenderWidgetUIView accessibilityElements]` 的 WeakPtr CHECK 崩溃，补丁 0007 修好。问题 1、2：静止页面 CPU 0.1%，GPU 光栅化默认开着。0001–0007 从头打上后，开始编真机版。
+- 2026-10-27（Mac）：0001–0007 的真机版编译通过，打包后发布为 Release `chromium-158.0.8127.0-sideload-2`（公开，预发布，标签指向提交 `aa05242`，IPA 的 SHA-256 是 `2a4f1c4c…336f86dfb`）。
+- 2026-10-27（Mac）：按用户要求查滚动条、Passkey、DrumBrake。滚动条和 Passkey 的结论见"真机反馈的问题"第 4、6 条（用户决定 Passkey 不做，滚动条暂缓）。**DrumBrake**：上游 V8 main 当天的三个解释器文件和固定版本完全一样，也编不过（验证过），所以自己修：新增 V8 补丁 0201（`patches/v8/`，打在 `src/v8` 上），把 `TrustedManaged::raw()` 改成 `unsafe_raw()` / `raw(no_gc)`，把 25 处用在普通堆对象上的 `TrustedCast<>` 改成 `Cast<>`，做法和上游别处一致（细节见 architecture.md）。读源码还发现两件事：① `--jitless` 只在 tvOS 上自动带上 `--wasm-jitless`，iPhone 上要自己传，否则仍然没有 `WebAssembly` 对象，所以 0001 加回了 `--wasm-jitless`（放在最后）；② iOS arm64 上 DrumBrake 默认不做显式边界检查，要靠 V8 的陷阱处理器，而 content 在 iOS 上默认不开它，DrumBrake 会在第一次实例化模块时 `CHECK` 崩溃，所以 `args/` 加了 `v8_drumbrake_bounds_checks = true`（还省掉每块 Wasm 内存 8 GB 的地址空间预留）。对照了 Blinker Fluid 的 wasm 类改动，都不用移植（见 patch-triage.md）。
+- 2026-10-27（Mac）：用户想要网页翻译。读源码发现 Chromium 版翻译被几处挡着：没有 API key 时 `TranslateManager` 直接不提供翻译（但 Google 翻译组件请求时用的是它脚本里自带的 key，下载当时的脚本确认过，所以可以放开）；Blink 版 ios/web 默认根本不注入 Chrome 的网页脚本（`kContentEnableInjectedFeatureScripts` 默认关），而且上游这条 JS 桥只写了一半（`JavaScriptFeature` 的调用在 Blink 下直接返回 false，`ContentWebFrame` 的调用格式也过时了）。新增补丁 0008：只为翻译放行语言检测和翻译两个功能的脚本，并把调用链接通（细节见 architecture.md）。另外发现 Blink 版网页请求不走系统代理设置（风险 15），模拟器里连不上 Google，翻译的最后一步（下载 Google 的翻译脚本）当时没法在模拟器里测；用户建议开代理软件的虚拟网卡模式，但用户不在电脑前，我没有改系统网络设置，后来用补丁 0009 解决（见下一条）。
+- 2026-10-27（Mac）：模拟器里验证了新补丁（新编的 app，从头打补丁后编译，`02-apply-patches.sh` 的结果和开发分支逐字节一致）。**WebAssembly**：测试页 17 项全过（含两个用 clang 编成 wasm32 的 C 程序，结果和 Mac 原生编译的一致），`try_table` 模块报 `CompileError`。**翻译**：先是看不到翻译提示，在测试页里挂钩子查出 JS 桥是通的，提示其实出现了，只是几秒后自动收起；从提示或菜单翻译都正常。**系统代理**（新补丁 0009）：google.com、github.com 都能打开了。google.com 却是旧版基础页面，用 curl 比对出原因是 UA 里冻结的 `iPhone OS 14_0`，新补丁 0010 改成和 iOS 27 的 Safari 一样的 18_7 后显示完整页面。**滚动**：用记录触摸事件的测试页查出，Chrome 下拉刷新的手势会取消网页收到的触摸（touchstart 之后马上 touchcancel），新补丁 0011 修好，页面跟手、带惯性。另外应用户建议在 Chromium 里打开了用户的字体项目页面（GitHub，README 里的 SVG 样张正常），并用这个字体（更纱 Ui PD，可变字体）做了网页字体测试：字重轴、斜体、`pnum`/`tnum`/`zero`、按语言切换的标点都和预期一致；Blink 默认的 `text-spacing-trim` 已经会挤压标点，所以单独开 `chws` 看不出差别；竖排时超过一组的连续破折号（四个 `—`、`⸻⸻`、斜体的 `——⸺`）在接缝处断开，Safari 也一样，强开 `curs`/`calt` 无效，应是字体这边的问题，已告诉用户。
+- 2026-10-27（Mac）：真机版带 DrumBrake 重编（13:25–14:04，V8 整个重编，没有错误），再增量编进 0010、0011（1 分钟，检查过二进制里已是 `iPhone OS 18_7`、带 `--wasm-jitless`）。`05-package-ipa.sh` 打包出 `dist/Chromium-158.0.8127.0-sideload-3.ipa`（148.5 MB，SHA-256 `5f559e49fb7aceb4e264a2923e0d9331959a16f44e2514160108d578dfe549ea`）。模拟器里 app 加载几个网页后的内存占用约 200 MB（`footprint`，峰值 215 MB）。

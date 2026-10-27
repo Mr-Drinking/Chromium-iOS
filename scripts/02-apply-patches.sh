@@ -49,7 +49,9 @@ prepare_repo() {
   case "$prepared" in *" $repo "*) return 0 ;; esac
   [ -e "$dir/.git" ] || die "$dir is not a git checkout"
   [ ! -d "$dir/.git/rebase-apply" ] || die "git am in progress in $dir; finish it or run: git -C $dir am --abort"
-  [ -z "$(git -C "$dir" status --porcelain --untracked-files=no)" ] || die "$dir has uncommitted changes"
+  # Dependencies such as src/v8 are gitlinks in src; a patched one shows up as
+  # modified there, and gets its own check when the series reaches it.
+  [ -z "$(git -C "$dir" status --porcelain --untracked-files=no --ignore-submodules=all)" ] || die "$dir has uncommitted changes"
   rev=$(base_rev_for "$repo")
   [ -n "$rev" ] || die "could not determine the base revision for $repo"
   git -C "$dir" config user.name >/dev/null || git -C "$dir" config user.name "ios-blink-sideload"
@@ -81,4 +83,7 @@ while IFS= read -r line; do
 done <<< "$entries"
 
 note "applied series:"
-git -C "$SRC" log --oneline "$CHROMIUM_REV..HEAD"
+for repo in $prepared; do
+  echo "$repo:"
+  git -C "$CHROMIUM_DIR/$repo" log --oneline "$(base_rev_for "$repo")..HEAD"
+done

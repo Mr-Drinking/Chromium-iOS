@@ -35,4 +35,5 @@ ios_enable_push_notification_service_extension = false
 # simulator exercises the jitless code paths the phone will run.
 v8_enable_sandbox = false
 cppgc_enable_caged_heap = false
-v8_enable_drumbrake = false
+v8_enable_drumbrake = true
+v8_drumbrake_bounds_checks = true

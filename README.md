@@ -2,14 +2,13 @@
 
 用官方 Chromium 源码编出"**Chrome iOS 原生界面 + Blink 内核**"的浏览器，侧载到没有越狱、也没有 Apple 浏览器引擎权限的 iPhone 上。目标设备：iPhone 13 mini（A15，4 GB 内存），iOS 27。
 
-> **当前状态：补丁、脚本和文档已经写好，但还没有在 Mac 上编译验证过。**
-> 补丁是对照固定版本的官方源码手写的，能用 `git am --3way` 干净打上，能不能编过、跑起来要在 Mac 上验证。进度见 [docs/status.md](docs/status.md)。
+> **当前状态：能用的测试版。** 模拟器和真机（iPhone 13 mini，iOS 27）上都编译、运行过，[Releases](https://github.com/Mr-Drinking/Chromium-iOS/releases) 里有未签名的 IPA。已知问题（发热、卡顿、没有 JIT 等）和进度见 [docs/status.md](docs/status.md)。
 
 ## 原理
 
 - **界面来自官方**：Chromium 官方支持 `use_blink = true` 编 `chrome` 目标（官方文档 `docs/ios/build_instructions.md`）。Chrome iOS 的界面代码（`ios/chrome`）不直接调用 WebKit，而是通过 `ios/web` 接口；打开 `use_blink` 后这层接口换成 `ios/web/content` 实现，下面接的就是 Blink。界面一行不用改，就是现在 Chrome iOS 的样子（含 iOS 26 的 Liquid Glass 设计）。
 - **难点在权限**：官方的 iOS Blink 默认多进程，靠 BrowserEngineKit 拉起渲染、GPU、网络扩展进程，需要 `com.apple.developer.web-browser-engine.host` 等权限。这些权限只有 Apple 批准的厂商才有，侧载签名拿不到。
-- **本项目的做法**：照官方 tvOS 版 Blink 的方式改成单进程。补丁 0001 加 `--single-process` 和免 JIT 参数；补丁 0002 让 GPU 线程把渲染出的图层直接挂到网页视图上，不再走 BrowserEngineKit 的跨进程交接；补丁 0003 在 GPU 初始化前等 Metal 设备就绪。V8 走免 JIT 模式。原计划让 WebAssembly 走 DrumBrake 解释器，但它在当前 V8 上编不过，所以暂时没有 WebAssembly（见 `docs/status.md`）。
+- **本项目的做法**：照官方 tvOS 版 Blink 的方式改成单进程。补丁 0001 加 `--single-process` 和免 JIT 参数；补丁 0002 让 GPU 线程把渲染出的图层直接挂到网页视图上，不再走 BrowserEngineKit 的跨进程交接；补丁 0003 在 GPU 初始化前等 Metal 设备就绪。V8 走免 JIT 模式，WebAssembly 由 V8 自带的解释器 DrumBrake 执行（上游 CI 不编它，V8 补丁 0201 修好了编译）。其余补丁修系统字体、错误页、翻译等问题，逐个说明见 [docs/architecture.md](docs/architecture.md)。
 - 思路参考了社区项目 [Blinker Fluid](https://github.com/Nodesclock/Blinker-Fluid)（GPL-3.0）。本仓库**不收录**它的代码，核心补丁是按同样思路在新版 Chromium 上重写的最小改动。
 
 ## 目录

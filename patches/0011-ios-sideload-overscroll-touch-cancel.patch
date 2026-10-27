@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 13:49:21 +0800
+Subject: [PATCH] iOS sideload: don't let the overscroll pan cancel page
+ touches
+
+OverscrollActionsController (pull to refresh, close tab, new tab) adds
+a UIPanGestureRecognizer to the web view's scroll view. With WebKit that
+is harmless: the scroll view scrolls with its own recognizer. With Blink
+the page scrolls itself from the raw touches it receives, and the scroll
+view only mirrors Blink's offset. Once the pan is recognized, a few
+points into a drag, UIKit cancels those touches (cancelsTouchesInView
+defaults to YES), so Blink gets touchcancel and stops scrolling.
+RenderWidgetUIView removes the scroll view's recognizers when a new
+render view attaches, which is why scrolling only failed some of the
+time.
+
+With Blink, keep the pan from cancelling or delaying touches.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator with a
+page that logs touch events and scrollY: before, a 400 pt drag gave one
+touchstart, then touchcancel and no scrolling; after, the page follows
+the finger 1:1 (421 px for 416 px of travel) and a fast flick keeps
+scrolling with momentum (955 px for 416 px). Pulling down at the top
+still does nothing harmful.
+
+diff --git a/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm b/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm
+index e7fb4bd20b68e9f85bdae5a6f11aa87e4a5355f9..785d094c95e2fe2658afbf4e2d9af60623bb08be 100644
+--- a/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm
++++ b/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm
+@@ -698,6 +698,14 @@ - (void)setup {
+   }
+   [panGesture setMaximumNumberOfTouches:1];
+   [panGesture setDelegate:self];
++#if BUILDFLAG(USE_BLINK)
++  // [ios-blink-sideload] With Blink the page scrolls itself from the raw
++  // touches it receives; the scroll view here only mirrors Blink's offset.
++  // Recognizing this pan must not cancel or delay those touches, or the page
++  // stops scrolling a few points into every drag.
++  panGesture.cancelsTouchesInView = NO;
++  panGesture.delaysTouchesEnded = NO;
++#endif
+   [[self scrollView] addGestureRecognizer:panGesture];
+   self.panGestureRecognizer = panGesture;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

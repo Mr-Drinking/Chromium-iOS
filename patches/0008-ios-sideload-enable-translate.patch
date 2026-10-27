@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 12:29:41 +0800
+Subject: [PATCH] iOS sideload: make translation available
+
+Several things kept Chrome's translate feature off in this build.
+
+TranslateManager refuses to offer translation when the build has no
+Google API key. The key is not needed: the translate element that
+Chrome injects into the page (translate.googleapis.com/translate_a/
+element.js and the main script it loads) sends its translateHtml
+requests with a key hard-coded in that script, not the one Chrome
+passes in. Default the existing ignore-missing-key switch to on.
+
+With Blink, ios/web injects Chrome's page scripts (JavaScriptFeatures)
+only behind kContentEnableInjectedFeatureScripts, which is off by
+default, so there is no page language detection and no translate
+script. Turning it on would inject all 30-odd features; under
+ios/web/content their scripts all run in the page's own world, and
+each costs jitless V8 time on every page load. Instead, with the flag
+off, inject just language detection and translate plus what their
+scripts build on (the gCrWeb base and the window.webkit.messageHandlers
+shim), let ContentWebFrame call into those two, and always set
+__gCrWeb.frameId, which their messages use to name the sending frame.
+
+The Blink side of the JavaScript bridge was also unfinished upstream:
+JavaScriptFeature::CallJavaScriptFunction() and ExecuteJavaScript()
+just returned false with Blink (TODO crbug.com/40254930), and
+ContentWebFrame still called page functions as
+__gCrWeb.<api>.<function>(), which gCrWeb no longer provides (it keeps
+registered APIs in a private registry). Forward the feature calls to
+the frame, and call page functions through
+__gCrWeb.callFunctionInGcrWeb() as WebKit's WebFrameImpl does.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator (with
+the system proxy patch, so the simulator reaches Google): on a German
+page the "Translate this page?" prompt appears, and translating from
+the prompt or the menu turns the text into Chinese.
+
+diff --git a/components/translate/core/browser/translate_manager.cc b/components/translate/core/browser/translate_manager.cc
+index de791aedd35d0fb4f8a8447336425db0324cb9d2..580fb3d98c03d7fe334e1936841624e4b99d27a5 100644
+--- a/components/translate/core/browser/translate_manager.cc
++++ b/components/translate/core/browser/translate_manager.cc
+@@ -755,7 +755,10 @@ LanguageState* TranslateManager::GetLanguageState() {
+   return &language_state_;
+ }
+ 
+-bool TranslateManager::ignore_missing_key_for_testing_ = false;
++// [ios-blink-sideload] Offer to translate even without a Google API key: the
++// translate element Chrome injects sends its translation requests with a key
++// of its own, so translation works in builds that have none.
++bool TranslateManager::ignore_missing_key_for_testing_ = true;
+ 
+ // static
+ void TranslateManager::SetIgnoreMissingKeyForTesting(bool ignore) {
+diff --git a/ios/web/content/js_messaging/content_java_script_feature_manager.mm b/ios/web/content/js_messaging/content_java_script_feature_manager.mm
+index a73a7f1c1dd9e7d55b8aa12468550ce1f063c984..0f541751f2e7f178336471131182845448dc1dec 100644
+--- a/ios/web/content/js_messaging/content_java_script_feature_manager.mm
++++ b/ios/web/content/js_messaging/content_java_script_feature_manager.mm
+@@ -64,10 +64,8 @@
+ 
+ void ContentJavaScriptFeatureManager::AddFeature(
+     const JavaScriptFeature* feature) {
+-  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
+-    return;
+-  }
+-
++  // [ios-blink-sideload] ContentWebFramesManager decides which features get
++  // here (see IsInjectedWithoutFlag() there).
+   if (HasFeature(feature)) {
+     return;
+   }
+diff --git a/ios/web/content/js_messaging/content_web_frame.mm b/ios/web/content/js_messaging/content_web_frame.mm
+index e5a8246bef299bb9a92f6ed4e3068f4717f3d511..95546c2ec071fbca0aee515ec7e3b3d3bb656c10 100644
+--- a/ios/web/content/js_messaging/content_web_frame.mm
++++ b/ios/web/content/js_messaging/content_web_frame.mm
+@@ -6,6 +6,7 @@
+ 
+ #import "base/feature_list.h"
+ #import "base/json/json_writer.h"
++#import "base/strings/string_split.h"
+ #import "base/strings/string_util.h"
+ #import "base/strings/stringprintf.h"
+ #import "base/strings/utf_string_conversions.h"
+@@ -29,6 +30,19 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+   std::move(web_callback).Run(&value, /*error=*/nil);
+ }
+ 
++// [ios-blink-sideload] Without kContentEnableInjectedFeatureScripts only the
++// features translation needs are injected (see content_web_frames_manager.mm),
++// so only calls into those can work.
++bool CanCallFunction(const std::string& name) {
++  return base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts) ||
++         name.starts_with("translate.") ||
++         name.starts_with("languageDetection.");
++}
++
++// [ios-blink-sideload] gCrWeb now keeps its APIs in a private registry, so
++// `__gCrWeb.api.function()` no longer exists; call through
++// __gCrWeb.callFunctionInGcrWeb() like ios/web/js_messaging/web_frame_impl.mm.
++// `name` is "api.function".
+ std::u16string CreateFunctionCallWithParameters(
+     const std::string& name,
+     const base::ListValue& parameters) {
+@@ -37,8 +51,13 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+     parameter_strings[i] = base::WriteJson(parameters[i]).value_or("");
+   }
+   std::string joined_paramters = base::JoinString(parameter_strings, ",");
+-  return base::UTF8ToUTF16(base::StringPrintf("__gCrWeb.%s(%s)", name.c_str(),
+-                                              joined_paramters.c_str()));
++  std::optional<std::pair<std::string_view, std::string_view>> name_parts =
++      base::SplitStringOnce(name, '.');
++  std::string api_name(name_parts ? name_parts->first : "");
++  std::string function_name(name_parts ? name_parts->second : name);
++  return base::UTF8ToUTF16(base::StringPrintf(
++      "__gCrWeb.callFunctionInGcrWeb(\"%s\", \"%s\", [%s])",
++      api_name.c_str(), function_name.c_str(), joined_paramters.c_str()));
+ }
+ 
+ }  // namespace
+@@ -88,7 +107,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+ bool ContentWebFrame::CallJavaScriptFunction(
+     const std::string& name,
+     const base::ListValue& parameters) {
+-  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
++  if (!CanCallFunction(name)) {
+     return false;
+   }
+   return ExecuteJavaScript(CreateFunctionCallWithParameters(name, parameters));
+@@ -99,7 +118,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+     const base::ListValue& parameters,
+     base::OnceCallback<void(const base::Value*)> callback,
+     base::TimeDelta timeout) {
+-  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
++  if (!CanCallFunction(name)) {
+     return false;
+   }
+   // TODO(crbug.com/40260088): Handle timeouts.
+@@ -111,7 +130,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+     const std::string& name,
+     const base::ListValue& parameters,
+     JavaScriptContentWorld* content_world) {
+-  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
++  if (!CanCallFunction(name)) {
+     return false;
+   }
+   // TODO(crbug.com/40260088): Handle injecting into an isolated world.
+@@ -124,7 +143,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+     JavaScriptContentWorld* content_world,
+     base::OnceCallback<void(const base::Value*)> callback,
+     base::TimeDelta timeout) {
+-  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
++  if (!CanCallFunction(name)) {
+     return false;
+   }
+   // TODO(crbug.com/40260088): Handle timeouts and injecting into an isolated
+diff --git a/ios/web/content/js_messaging/content_web_frames_manager.mm b/ios/web/content/js_messaging/content_web_frames_manager.mm
+index 3fa96c90ba6f3ec8dc99bde1d4e1fbc5f8c87043..6883106f53b2c9fab0d9337b598003a006b77045 100644
+--- a/ios/web/content/js_messaging/content_web_frames_manager.mm
++++ b/ios/web/content/js_messaging/content_web_frames_manager.mm
+@@ -50,6 +50,22 @@
+   return send_webkit_message_feature.get();
+ }
+ 
++// [ios-blink-sideload] Without kContentEnableInjectedFeatureScripts (off by
++// default), still inject what translation needs: page language detection and
++// the translate script, plus the gCrWeb base and the message shim that their
++// scripts build on. The full set is 30-odd features whose scripts all run in
++// the page's own world here, each costing jitless V8 time on every page load.
++bool IsInjectedWithoutFlag(const JavaScriptFeature* feature) {
++  if (feature == GetSendWebKitMessageJavaScriptFeature() ||
++      feature == java_script_features::GetBaseJavaScriptFeature()) {
++    return true;
++  }
++  std::optional<std::string> handler_name =
++      feature->GetScriptMessageHandlerName();
++  return handler_name && (*handler_name == "LanguageDetectionTextCaptured" ||
++                          *handler_name == "TranslateMessage");
++}
++
+ }  // namespace
+ 
+ ContentWebFramesManager::ContentWebFramesManager(
+@@ -79,6 +95,11 @@
+            content_web_state->GetBrowserState())) {
+     java_script_features.push_back(feature);
+   }
++  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
++    std::erase_if(java_script_features, [](JavaScriptFeature* feature) {
++      return !IsInjectedWithoutFlag(feature);
++    });
++  }
+ 
+   js_feature_manager_ = std::make_unique<ContentJavaScriptFeatureManager>(
+       std::move(java_script_features));
+@@ -177,7 +198,9 @@
+       render_frame_host->GetGlobalId();
+   WebFrame* web_frame = WebFrameForContentId(content_id);
+ 
+-  if (base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
++  // [ios-blink-sideload] Always: some features are injected even without
++  // kContentEnableInjectedFeatureScripts (see IsInjectedWithoutFlag()).
++  {
+     // Inject JavaScript to override `getFrameId` to return the WebFrame id
+     // chosen in `RenderFrameCreated`. This must happen even if the frame has
+     // already been added to `available_frame_hosts_`, since navigation to a new
+diff --git a/ios/web/js_messaging/java_script_feature.mm b/ios/web/js_messaging/java_script_feature.mm
+index c53a109ff41d7944270f03700464f3ce70c65175..15846870865f342e0374de0b0de87c7cc001b3f1 100644
+--- a/ios/web/js_messaging/java_script_feature.mm
++++ b/ios/web/js_messaging/java_script_feature.mm
+@@ -330,8 +330,12 @@ bool IsScriptEnabled(NSString* script_token) {
+   DCHECK(web_frame);
+ 
+ #if BUILDFLAG(USE_BLINK)
+-  // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
+-  return false;
++  // [ios-blink-sideload] ios/web/content has no content worlds (every feature
++  // script runs in the page's own world), so call the frame directly.
++  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
++    return false;
++  }
++  return web_frame->CallJavaScriptFunction(function_name, parameters);
+ #else
+   if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+     return false;
+@@ -366,8 +370,13 @@ bool IsScriptEnabled(NSString* script_token) {
+   DCHECK(web_frame);
+ 
+ #if BUILDFLAG(USE_BLINK)
+-  // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
+-  return false;
++  // [ios-blink-sideload] ios/web/content has no content worlds (every feature
++  // script runs in the page's own world), so call the frame directly.
++  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
++    return false;
++  }
++  return web_frame->CallJavaScriptFunction(function_name, parameters,
++                                           std::move(callback), timeout);
+ #else
+   if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+     return false;
+@@ -427,8 +436,12 @@ bool IsScriptEnabled(NSString* script_token) {
+   DCHECK(web_frame);
+ 
+ #if BUILDFLAG(USE_BLINK)
+-  // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
+-  return false;
++  // [ios-blink-sideload] ios/web/content has no content worlds (every feature
++  // script runs in the page's own world), so call the frame directly.
++  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
++    return false;
++  }
++  return web_frame->ExecuteJavaScript(script, std::move(callback));
+ #else
+   if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+     return false;
+-- 
+2.54.0 (Apple Git-157)
+

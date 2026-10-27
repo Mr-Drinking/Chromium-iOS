@@ -32,7 +32,7 @@
 
 - 按 `docs/status.md` 的阶段推进：环境 → 模拟器里跑 Chrome → 真机 → 补强。先在模拟器里把问题解决掉，再上真机。
 - **编译报错先查 API 漂移。** 补丁是对着 158 的源码手写的，但没有编译器检查过。已经踩过两次：物理内存接口改成了 `base::SysInfo::AmountOfTotalPhysicalMemory().InMiB()`；`kJavaScriptFlags` 挪到了 `blink::switches`，所以补丁里直接写 `"js-flags"`。在 Chromium 的 `src` 里 `git grep` 确认，不要凭记忆。
-- **改补丁的流程**（`docs/build-guide.md` 第 7 节）：在 `src` 的 `ios-blink-sideload` 分支上改并提交 → `git format-patch 4558926c..HEAD` → 覆盖 `patches/` 里对应文件 → 重跑 `scripts/02-apply-patches.sh` 验证 → 更新 `docs/status.md` → 提交本仓库。
+- **改补丁的流程**（`docs/build-guide.md` 第 7 节）：在 `src` 的 `ios-blink-sideload` 分支上改并提交 → `git format-patch --zero-commit --no-numbered --no-stat --full-index 4558926c..HEAD` → 覆盖 `patches/` 里对应文件 → 重跑 `scripts/02-apply-patches.sh` 验证 → 更新 `docs/status.md` → 提交本仓库。V8 的补丁（`patches/v8/`）在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（`f7be3c62`）。
 - 代码改动统一加 `[ios-blink-sideload]` 注释；补丁只放语义改动，不夹带格式化。
 - `gclient sync`、首次编译要几十分钟到几小时，放后台跑，并告诉用户大概要等多久。
 - 写进文档的结论要标明是"验证过"还是"推测"。

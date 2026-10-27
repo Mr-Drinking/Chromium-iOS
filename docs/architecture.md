@@ -48,7 +48,7 @@ IOSChromeMain()                       ios/chrome/app/startup/ios_chrome_main.mm
 | 参数 | 作用 |
 |---|---|
 | `--single-process` | 渲染、GPU、网络都在本进程的线程里跑，不需要扩展进程 |
-| `--js-flags=--jitless --max-old-space-size=… --max-semi-space-size=…` | V8 不生成机器码；堆上限按内存分档，4 GB 机型是 384/16 MB（沿用 Blinker Fluid 的实测值）。不能加 `--wasm-jitless`：这个参数只有编了 DrumBrake 才存在（而且编了的话 `--jitless` 会自动带上），V8 遇到不认识的参数会忽略它后面的全部参数，堆上限就没了 |
+| `--js-flags=--jitless --max-old-space-size=… --max-semi-space-size=… --wasm-jitless` | V8 不生成机器码；堆上限按内存分档，4 GB 机型是 384/16 MB（沿用 Blinker Fluid 的实测值）。`--wasm-jitless` 让 WebAssembly 在 DrumBrake 解释器里跑：免 JIT 时，V8 只有带上它才提供 `WebAssembly` 对象（`v8/src/wasm/wasm-js.cc`）。tvOS 上 `--jitless` 会自动带上它，iPhone 上不会（`flag-definitions.h` 里这条蕴含只在 `V8_OS_TVOS` 下成立）。它放在最后：没编 DrumBrake 的构建不接受它，而 V8 遇到出错的参数会忽略后面的全部参数，堆上限就没了 |
 | `--disable-gpu-watchdog` | 单进程里 GPU 看门狗杀掉慢线程等于杀掉整个 app |
 | `--force-gpu-mem-available-mb=384`（4 GB 机型） | 限制图块缓存，避免重网页把进程推过 jetsam 上限 |
 | `--enable-features=WebContentsDiscard` | 允许丢弃后台标签页 |
@@ -87,6 +87,41 @@ Blink 版 ios/web 的 `PrepareErrorPage()` 是占位实现，任何加载失败�
 
 `-[RenderWidgetUIView accessibilityElements]` 没检查弱指针就解引用。导航换掉 `RenderWidgetHostViewIOS` 之后，UIAccessibility 还可能在主队列上回头查询旧的 UIView，于是 WeakPtr 的 `CHECK` 让整个 app 崩溃。只要无障碍功能处于激活状态（VoiceOver、语音控制、UI 自动化）就会碰到。2026-10-27 用 AXe 测试时复现并修好了。
 
+### 0008 让翻译可用（`components/translate/…`、`ios/web/content/js_messaging/…`）
+
+Chromium 版的翻译被三道关卡挡着：
+
+1. **API key。** `TranslateManager` 在构建没有 Google API key 时不提供翻译（`google_apis::HasAPIKeyConfigured()`，三处检查），所以连翻译按钮都没有。但翻译本身用不着这个 key：Chrome 注入网页的 Google 翻译组件（`translate.googleapis.com/translate_a/element.js` 和它再加载的主脚本）请求 `translate-pa.googleapis.com/v1/translateHtml` 时，带的是脚本里写死的 key，不是 Chrome 传进去的那个（2026-10-27 下载当时的脚本确认过）。三处检查都看同一个静态开关 `ignore_missing_key_for_testing_`，补丁把它的默认值改成 `true`。
+2. **网页脚本。** Blink 版 ios/web 只有打开 `kContentEnableInjectedFeatureScripts` 才注入 Chrome 的网页脚本（JavaScriptFeature），这个开关默认关着，所以既不检测网页语言，也没有翻译脚本。整个打开会注入 30 多个功能的脚本（自动填充、密码等），在 ios/web/content 里它们都跑在网页自己的 JS 环境里，免 JIT 时每次加载网页都要多花时间，安全上也不理想。补丁只放行翻译要用的：语言检测、翻译，加上它们依赖的 gCrWeb 基础脚本和 `window.webkit.messageHandlers` 转发脚本（`content_web_frames_manager.mm` 里的 `IsInjectedWithoutFlag()`）；`ContentWebFrame` 允许调用这两个功能的 JS 函数；`__gCrWeb.frameId` 总是设置，因为它们发回的消息靠它找到发送的框架。
+3. **调用链没接通。** 上游 Blink 版的 JS 桥只写了一半：`JavaScriptFeature::CallJavaScriptFunction()` 和 `ExecuteJavaScript()` 在 Blink 下直接返回 false（`ios/web/js_messaging/java_script_feature.mm` 里的 TODO，crbug.com/40254930）；`ContentWebFrame` 还按 `__gCrWeb.<api>.<函数>()` 调用网页里的函数，但 gCrWeb 现在把注册的 API 放在私有表里，这种写法已经调不到了（`ios/web/public/js_messaging/resources/gcrweb.ts`）。补丁让前两者转给网页框架，调用格式改成和 WebKit 版（`ios/web/js_messaging/web_frame_impl.mm`）一样走 `__gCrWeb.callFunctionInGcrWeb()`。也就是说，即使打开上面那个开关，上游 Blink 版的网页脚本调用其实也都不通。
+
+语言检测不需要联网：TFLite 模型下载不到时，iOS 会退回内置的检测方法（`ios_language_detection_tab_helper.mm`）。
+
+模拟器里验证过（配合 0009 让模拟器连上 Google）：打开德语网页会弹出"翻译网页吗？从德语到简体中文"，从提示或菜单里翻译后正文变成中文。在测试页里挂钩子看到的调用顺序：原生调用 `languageDetection.detectLanguage()` → 网页发回 `LanguageDetectionTextCaptured` → 原生调用 `retrieveBufferedTextContent()` 取回正文。副作用：转发脚本让任何名字的 `window.webkit.messageHandlers.xxx` 都"存在"，有的网页会据此发消息，日志里会出现 `No message handler for youtubewebview` 之类，没有害处。
+
+### 0009 网页请求走系统代理设置（`services/network/network_context.cc`）
+
+Blink 版的网页请求走 content 的网络服务，而 ios/web 从不给它传代理设置，`NetworkContext` 就退回直连。结果 iOS 里给 Wi-Fi 配的 HTTP 代理、PAC 对网页都无效，Safari 和 WebKit 版 Chrome 却都认；模拟器里也一样，Mac 的系统代理不起作用（2026-10-27 实测：模拟器里 Safari 能经 Mac 的代理打开 google.com，Chromium 打不开 google.com 和 github.com）。补丁在 iOS 上、嵌入方没给代理设置时，改用 `net::ProxyConfigService::CreateSystemProxyConfigService()`（即 `ProxyConfigServiceIOS`）读系统设置，`URLRequestContextBuilder` 随后用系统的解析器处理 PAC。Clash 等 VPN 型代理本来就不受影响。模拟器里验证过：Mac 设了系统代理后，google.com、github.com 都能打开（之前都卡住）。
+
+### 0010 UA 里的 iOS 版本（`components/embedder_support/user_agent_utils.cc`）
+
+上游的精简 UA 把 iOS 版本冻结在 `iPhone OS 14_0`，网站会当成过时的浏览器：google.com 对这个 UA 只给 32 KB 的基础版 HTML，同一个 UA 只把版本改成 18_7 就给 203 KB 的完整页面，Safari、Chrome iOS、Android Chrome 的 UA 也都是完整页面（2026-10-27 用 curl 对比过）。iOS 27 上 Safari 自己的 UA 冻结在 `iPhone OS 18_7`（模拟器里实测），补丁改成同样的值，iPad 同理。模拟器里验证过：改后 google.com 显示完整页面。
+
+### 0011 下拉刷新的手势不再打断网页滚动（`ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm`）
+
+Chrome 的下拉动作（刷新、关闭标签页、新标签页）往网页的滚动视图上加了一个 `UIPanGestureRecognizer`。WebKit 下没问题，滚动视图用自己的手势滚动；Blink 下网页是靠收到的原始触摸自己滚动的，那个滚动视图只是镜像 Blink 的偏移。手势一识别（拖动几个点之后），UIKit 就按默认的 `cancelsTouchesInView` 取消这些触摸，Blink 收到 touchcancel，页面就不滚了。`RenderWidgetUIView` 换渲染视图时会把这个滚动视图上的手势全部移除，所以只是"有时候"滚不动，对应用户说的"有点卡"。补丁让 Blink 构建里这个手势不取消、不延迟触摸。下拉动作在 Blink 下本来就触发不了（镜像的偏移不会小于 0），没有损失。模拟器里验证过（记录触摸事件和 `scrollY` 的测试页）：之前拖 400 pt 只收到 touchstart 和 touchcancel，页面不动；之后页面跟手（手指移动 416 px，滚动 421 px），快速一划带惯性滚 955 px；在顶部往下拉也没有异常。
+
+### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
+
+上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：
+
+- `TrustedManaged<T>::raw()` 现在要传一个 `DisallowGarbageCollection&`。句柄（`DirectHandle`）保活、中间可能触发 GC 的地方（`Execute()` 等）改用 `unsafe_raw()`，上游别处（`wasm-objects-inl.h`）也是这么用的；只拿 `Tagged` 指针、不会 GC 的两处（`GetInterpretedStack()`、`GetFunctionIndex()`）开一个 `DisallowGarbageCollection` 再调 `raw(no_gc)`。
+- `TrustedCast<T>` 现在只接受受信任类型。DrumBrake 拿它转 `WasmTableObject`、`WasmArray`、`Map`、`HeapObject` 等普通堆对象，一共 25 处，都改成 `Cast<T>`。两者都只在 DCHECK 里检查类型，行为不变；上游别处转同样的对象也用 `Cast<T>`（如 `runtime-wasm.cc`、`constant-expression-interface.cc`）。
+
+补丁放在 `patches/v8/`，`series` 里写成 `src/v8:v8/0201-….patch`，打在 `src/v8` 的同名分支上，基准是 `src/DEPS` 里的 `v8_revision`。DrumBrake 不支持新版异常处理（`try_table`/`throw_ref`）：免 JIT 时 V8 直接拒绝这种模块，网页拿到的是 `CompileError`，不会崩溃（`function-body-decoder-impl.h`）；旧版 `try`/`catch` 可以用。
+
+模拟器里验证过（`v8_drumbrake_bounds_checks = true` 加 `--wasm-jitless`）：自己写的测试页覆盖算术、内存、表、尾调用、异常（含 `WebAssembly.JSTag`）、GC 结构和数组、SIMD，以及两个用 clang 编成 wasm32 的 C 程序，17 项全部通过；`try_table` 模块报 `CompileError`。速度：C 写的 SHA-256 和 Mandelbrot 比 JIT（Mac 上的 Chromium）慢 4–6 倍，`fib(25)` 和免 JIT 的 JS 差不多（9 ms 对 10 ms）。
+
 ### 可选补丁
 
 - `optional/0101`：GL 实现为空时记录错误并返回空指针，而不是 `NOTREACHED()`/`CHECK` 直接崩溃。方便看日志。
@@ -100,7 +135,8 @@ Blink 版 ios/web 的 `PrepareErrorPage()` 是占位实现，任何加载失败�
 | `ios_enable_code_signing = false`（真机） | 产出未签名的 .app，由侧载工具用你的 Apple ID 签 |
 | `ios_enable_*_extension = false` 等 8 项 | 关掉 Chrome 自带的分享、小组件、密码填充等扩展；侧载时每个扩展都要占一个 App ID |
 | `v8_enable_sandbox = false`，`cppgc_enable_caged_heap = false` | 两者都要预留很大的虚拟地址空间，侧载 app 未必有 extended-virtual-addressing（Blinker Fluid 在真机上用的就是这组） |
-| `v8_enable_drumbrake = false` | 本来想开：免 JIT 时 WebAssembly 要靠 DrumBrake 解释器跑，tvOS 也是这么配的。但 DrumBrake 在固定版本的 V8 上编不过（`Managed::raw()` 少了 `no_gc` 参数、`TrustedCast<>` 用在了非受信任类型上），V8 2026-10-26 的 main 也一样（验证过）。所以暂时关掉，代价是免 JIT 时没有 WebAssembly |
+| `v8_enable_drumbrake = true` | 免 JIT 时 WebAssembly 靠 DrumBrake 解释器跑，tvOS 也是这么配的。DrumBrake 在固定版本的 V8 上编不过，V8 补丁 0201 修好了（见第 3 节） |
+| `v8_drumbrake_bounds_checks = true` | Wasm 内存访问做显式边界检查。iOS arm64 默认不做，改用 Wasm 内存四周 8 GB 的保护区加 V8 的陷阱处理器来发现越界。但 content 在 iOS 上默认不开陷阱处理器（`features::kWebAssemblyTrapHandler`），这时 DrumBrake 在第一次实例化模块时就 `CHECK` 崩溃（`wasm-interpreter.cc`），而每块 Wasm 内存预留 8 GB 地址空间，侧载 app 也未必给得起。显式检查两样都不需要，代价是访存稍慢 |
 
 `v8/gni/v8.gni` 里 tvOS（"runs in single process mode and is not allowed to use JIT"）的配置还有 `v8_enable_lite_mode = true`、`v8_enable_turbofan = false`。我们没开：它们能让包更小，但以后想加 JIT 就得重新编。如果内存吃紧可以试。
 

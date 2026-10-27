@@ -77,6 +77,10 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 - 打开网址最稳的办法：`xcrun simctl openurl <udid> 'chromium://example.com'`（`chromiums://` 是 https），然后 `axe tap --label '打开'` 点系统确认框。直接在地址栏里输入，容易被键盘的自动修正气泡挡住建议行。
 - 模拟器里的 app 能直接访问 Mac 的 `localhost`，本地起个 `python3 -m http.server` 放测试页就行。
 - 注意：AXe 会激活无障碍功能，可能触发只有开 VoiceOver 才会碰到的 bug（补丁 0007 就是这么发现的）。
+- 网页里的文字不在 AXe 读到的界面结构里，要看网页状态就截图，或者让测试页把要看的数据画在页面顶部。
+- 查 Chrome 网页脚本的问题：Blink 版所有注入脚本都跑在网页自己的 JS 环境里，测试页可以直接检查 `window.__gCrWeb`，还能包一层 `__gCrWeb.callFunctionInGcrWeb`（原生调网页）和 `window.webkitMessageHandler.postMessage`（网页发给原生）把往来记下来（补丁 0008 的翻译问题就是这么查的）。
+- 查触摸和滚动：测试页监听 `touchstart`/`touchmove`/`touchend`/`touchcancel` 和 `scroll`，把计数和 `scrollY` 画在固定的浮层里，再用 `axe swipe --duration 1 --delta 4` 慢拖、`--duration 0.15` 快划（补丁 0011 就是这么查出来的）。
+- 模拟器里的 Chromium 走 Mac 的系统代理（补丁 0009），系统代理开着就能打开 Google；需要对照时，`xcrun simctl openurl` 打开 http(s) 网址会用模拟器里的 Safari。
 
 ## 4. 真机
 
@@ -130,7 +134,7 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.i
 
 1. 在 `~/chromium/src` 的 `ios-blink-sideload` 分支上直接改代码、编译、测试。
 2. 修改完提交到对应补丁的 commit（`git commit --fixup` 加 `git rebase -i --autosquash`，或新开一个 commit 作为新补丁）。
-3. 导出：`git format-patch 4558926c..HEAD -o /tmp/new-patches`，把结果覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。
+3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 4558926c..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。V8 的补丁（`patches/v8/`）在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `f7be3c62`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index f7be3c62..HEAD -o /tmp/new-v8-patches`，文件名按 `v8/0201-…` 起。
 4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。
 5. 更新 `docs/status.md`，提交本仓库。
 

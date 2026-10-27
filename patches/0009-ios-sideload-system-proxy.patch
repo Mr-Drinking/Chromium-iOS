@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 13:10:22 +0800
+Subject: [PATCH] iOS sideload: use the system proxy settings for web content
+
+With Blink, page loads go through content's network service, and
+ios/web never gives it a proxy config, so NetworkContext falls back to
+a direct connection. Proxies set in the system (a Wi-Fi HTTP proxy or
+PAC on the phone, the Mac's proxy in the simulator) are ignored, while
+Safari and Chrome's WebKit build honor them.
+
+On iOS, when the embedder supplies no proxy config, read the system
+settings with net::ProxyConfigService::CreateSystemProxyConfigService()
+(ProxyConfigServiceIOS); URLRequestContextBuilder then resolves PAC
+with the system resolver. VPN-type proxies were never affected.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator: with
+the Mac's system HTTP proxy set, google.com and github.com load; before
+this change both hung, while Safari in the same simulator loaded them.
+
+diff --git a/services/network/network_context.cc b/services/network/network_context.cc
+index 68d93ae1a6be2dc681d0ff51f7a3946dbb6d8269..faaaa407e178ee42037f907854a7da6985aef7e2 100644
+--- a/services/network/network_context.cc
++++ b/services/network/network_context.cc
+@@ -109,6 +109,7 @@
+ #include "net/net_buildflags.h"
+ #include "net/proxy_resolution/configured_proxy_resolution_service.h"
+ #include "net/proxy_resolution/proxy_config.h"
++#include "net/proxy_resolution/proxy_config_service.h"
+ #include "net/shared_dictionary/shared_dictionary_isolation_key.h"
+ #include "net/ssl/ech_mode_getter.h"
+ #include "net/ssl/ssl_config_service.h"
+@@ -3132,6 +3133,16 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
+   SSLConfigServiceMojo* ssl_config_service_raw = ssl_config_service.get();
+   builder.set_ssl_config_service(std::move(ssl_config_service));
+ 
++#if BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] ios/web never gives the network service a proxy
++  // config, so it would connect directly and ignore the system proxy settings
++  // (a Wi-Fi HTTP proxy or PAC; the Mac's proxy in the simulator) that Safari
++  // honors. Read the system settings instead, as Chrome's WebKit build does;
++  // URLRequestContextBuilder then resolves PAC with the system resolver.
++  const bool use_system_proxy_config =
++      !params_->initial_proxy_config &&
++      !params_->proxy_config_client_receiver.is_valid();
++#endif
+   if (!params_->initial_proxy_config &&
+       !params_->proxy_config_client_receiver.is_valid()) {
+     params_->initial_proxy_config =
+@@ -3141,6 +3152,13 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
+       std::move(params_->proxy_config_client_receiver),
+       std::move(params_->initial_proxy_config),
+       std::move(params_->proxy_config_poller_client)));
++#if BUILDFLAG(IS_IOS)
++  if (use_system_proxy_config) {
++    builder.set_proxy_config_service(
++        net::ProxyConfigService::CreateSystemProxyConfigService(
++            base::SequencedTaskRunner::GetCurrentDefault()));
++  }
++#endif
+   builder.set_pac_quick_check_enabled(params_->pac_quick_check_enabled);
+ 
+   std::unique_ptr<PrefService> pref_service;
+-- 
+2.54.0 (Apple Git-157)
+

@@ -13,7 +13,7 @@ Blinker Fluid（[Nodesclock/Blinker-Fluid](https://github.com/Nodesclock/Blinker
 | core | 11 | 单进程、不靠 BrowserEngineKit 出画面所必需（已用本项目自己的最小补丁重写，见“本项目对应”列） |
 | noop | 1 | Blinker 改了但没有功能变化 |
 | memory | 9 | 地址空间/内存上限相关；先看真机上 extended-virtual-addressing 是否生效、是否 OOM，再决定是否移植 |
-| wasm | 3 | 免 JIT 模式下 WebAssembly 走 DrumBrake 解释器的小修。注意：DrumBrake 本身在固定版本的 V8 上编不过，2026-10-27 起 `v8_enable_drumbrake = false`，这一类暂时用不上 |
+| wasm | 3 | 免 JIT 模式下 WebAssembly 走 DrumBrake 解释器的小修。2026-10-27 对照过，都不用移植：两处只是调整 include；`wasm-js.cc` 那处是没编 DrumBrake 时不暴露 `WebAssembly`（它的注释说真机上没开 DrumBrake）。本项目用 V8 补丁 0201 修好并开启 DrumBrake，由 0001 传 `--wasm-jitless` |
 | jit | 9 | 调试器挂载后的 V8 JIT（RX 映射 + RW 镜像）；iOS 26+ 的 A15 机型还要额外适配 StikDebug 的脚本机制，放最后 |
 | fix | 9 | 通用 bug 修复/功能增强（视频、触摸、横屏尺寸、文件选择等），出现对应问题时按需移植 |
 | legacy | 53 | 只为 iOS 12–17 或 Xcode 15 SDK 做的兼容；我们只支持 iOS 26+、用 Xcode 26/27，不需要 |
@@ -60,9 +60,9 @@ Blinker Fluid（[Nodesclock/Blinker-Fluid](https://github.com/Nodesclock/Blinker
 
 | 文件 | 改动（相对 M149） | 合并到 158 | 本项目对应 | 用途 |
 |---|---|---|---|---|
-| `v8/src/wasm/interpreter/wasm-interpreter-runtime-inl.h` | +1/-1 | 干净 | — | DrumBrake 小修 |
-| `v8/src/wasm/interpreter/wasm-interpreter.cc` | +1/-1 | 冲突 1 处 | — | DrumBrake 小修 |
-| `v8/src/wasm/wasm-js.cc` | +13/-2 | 干净 | — | 免 JIT 模式下让 Wasm 走 DrumBrake 解释器 |
+| `v8/src/wasm/interpreter/wasm-interpreter-runtime-inl.h` | +1/-1 | 干净 | 不需要 | DrumBrake 小修（只调整 include） |
+| `v8/src/wasm/interpreter/wasm-interpreter.cc` | +1/-1 | 冲突 1 处 | 不需要 | DrumBrake 小修（只调整 include） |
+| `v8/src/wasm/wasm-js.cc` | +13/-2 | 干净 | 0001 的 `--wasm-jitless` | 只有编了 DrumBrake 才暴露 `WebAssembly` |
 
 ## jit
 

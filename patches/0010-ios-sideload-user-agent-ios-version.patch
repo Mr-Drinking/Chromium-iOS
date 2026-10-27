@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 13:32:17 +0800
+Subject: [PATCH] iOS sideload: report iOS 18_7 in the user agent
+
+The reduced user agent freezes the iOS version at 14_0, and sites treat
+that as an outdated browser: google.com serves its basic HTML page to
+our UA (32 KB), but its full page (203 KB) to the same UA with 18_7, and
+to Safari, Chrome iOS and Android Chrome UAs (checked with curl on
+2026-10-27). Safari on iOS 27 freezes its own UA at 18_7, so use that.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator:
+google.com now serves its full page instead of the basic one.
+
+diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
+index 833293873f5e82151264c849bae2230c0b94904c..7323288923c0658d3f9c79cc86740046f4d77d01 100644
+--- a/components/embedder_support/user_agent_utils.cc
++++ b/components/embedder_support/user_agent_utils.cc
+@@ -303,10 +303,13 @@ std::string GetUnifiedPlatform() {
+ #elif BUILDFLAG(IS_LINUX)
+   return "X11; Linux x86_64";
+ #elif BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] Frozen at 18_7 like Safari on iOS 27 (upstream says
++  // 14_0). Sites treat iOS 14 as outdated: google.com serves its basic HTML
++  // page to it, but the full page to the same UA with 18_7.
+   if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+-    return "iPad; CPU iPad OS 14_0 like Mac OS X";
++    return "iPad; CPU iPad OS 18_7 like Mac OS X";
+   }
+-  return "iPhone; CPU iPhone OS 14_0 like Mac OS X";
++  return "iPhone; CPU iPhone OS 18_7 like Mac OS X";
+ #else
+ #error Unsupported platform
+ #endif
+diff --git a/components/embedder_support/user_agent_utils_unittest.cc b/components/embedder_support/user_agent_utils_unittest.cc
+index 55e50ab9e0ecfbf0bfdfce482c67317c747abb15..23cbff0fa43d024b637d9dba8fbd4d33c4d8dba1 100644
+--- a/components/embedder_support/user_agent_utils_unittest.cc
++++ b/components/embedder_support/user_agent_utils_unittest.cc
+@@ -167,8 +167,8 @@ class UserAgentUtilsTest : public testing::Test {
+         "Linux; Android 10; K";
+ #elif BUILDFLAG(IS_IOS)
+         ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
+-            ? "iPad; CPU iPad OS 14_0 like Mac OS X"
+-            : "iPhone; CPU iPhone OS 14_0 like Mac OS X";
++            ? "iPad; CPU iPad OS 18_7 like Mac OS X"
++            : "iPhone; CPU iPhone OS 18_7 like Mac OS X";
+ #else
+ #error Unsupported platform
+ #endif
+-- 
+2.54.0 (Apple Git-157)
+
