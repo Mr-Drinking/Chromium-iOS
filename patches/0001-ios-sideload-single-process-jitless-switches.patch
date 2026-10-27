@@ -1,5 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 01:59:10 +0800
 Subject: [PATCH] iOS sideload: run single-process and jitless by default
 
 A sideloaded app cannot hold the BrowserEngineKit entitlements, so the web
@@ -10,13 +11,27 @@ jitless with RAM-scaled heap limits, disable the GPU watchdog, cap the GPU
 memory estimate, enable WebContentsDiscard and disable AVFoundation overlays
 and the back/forward cache.
 
+Only --jitless, not --wasm-jitless: that flag exists only in builds with
+DrumBrake (which --jitless then implies anyway), and V8 ignores every flag
+after an unknown one, which would drop the heap limits.
+
+Also disable NetTaskScheduler. With the network service in-process, its
+scheduler installs the network service thread's queues as the process-wide
+net::GetTaskRunner(), but the Chrome app's ios/web NetworkContext creates
+URLLoaders on the IO thread, whose watchers then get bound to the wrong
+thread (DCHECK in mojo::SimpleWatcher on the first omnibox request).
+Without the scheduler every URLLoader uses its own thread's task runner.
+
 Applies to every content embedder (content_shell and the Chrome app).
 
 Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
 applies with git am --3way. Verify on a Mac before trusting it.
----
+2026-10-27: dropped --wasm-jitless (DrumBrake is off, see args/device.gn);
+disabled NetTaskScheduler after the Chrome app crashed at startup in the
+simulator.
+
 diff --git a/content/app/content_main.cc b/content/app/content_main.cc
-index 0fd60fa820805069ff01a2442f14de2b5e984e5a..edb9525348ca44e758d3f6f7547bf474efe13eaa 100644
+index 0fd60fa820805069ff01a2442f14de2b5e984e5a..4a0a2dd827d46ea918909caab08a507aa76a7523 100644
 --- a/content/app/content_main.cc
 +++ b/content/app/content_main.cc
 @@ -27,6 +27,7 @@
@@ -27,7 +42,7 @@ index 0fd60fa820805069ff01a2442f14de2b5e984e5a..edb9525348ca44e758d3f6f7547bf474
  #include "base/task/single_thread_task_executor.h"
  #include "base/task/thread_pool/thread_pool_instance.h"
  #include "base/threading/platform_thread.h"
-@@ -113,6 +114,76 @@ void SetupSignalHandlers() {
+@@ -113,6 +114,80 @@ void SetupSignalHandlers() {
  
  #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
  
@@ -74,7 +89,7 @@ index 0fd60fa820805069ff01a2442f14de2b5e984e5a..edb9525348ca44e758d3f6f7547bf474
 +    }
 +    command_line->AppendSwitchASCII(
 +        kJsFlagsSwitch,
-+        "--jitless --wasm-jitless --max-old-space-size=" +
++        "--jitless --max-old-space-size=" +
 +            base::NumberToString(old_space_mb) +
 +            " --max-semi-space-size=" + base::NumberToString(semi_space_mb));
 +  }
@@ -96,15 +111,19 @@ index 0fd60fa820805069ff01a2442f14de2b5e984e5a..edb9525348ca44e758d3f6f7547bf474
 +  // AVSampleBufferDisplayLayer video needs extra fixes before it draws through
 +  // the in-process layer tree (see docs/patch-triage.md), and the
 +  // back/forward cache keeps whole pages alive inside the one process.
++  // NetTaskScheduler would point net::GetTaskRunner() at the in-process
++  // network service thread, while the Chrome app's ios/web NetworkContext
++  // runs its URLLoaders on the IO thread.
 +  AppendToFeatureSwitch(command_line, switches::kDisableFeatures,
-+                        "avfoundation-overlays,BackForwardCache");
++                        "avfoundation-overlays,BackForwardCache,"
++                        "NetTaskScheduler");
 +}
 +#endif  // BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
 +
  bool IsSubprocess() {
    auto type = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
        switches::kProcessType);
-@@ -300,6 +371,9 @@ NO_STACK_PROTECTOR int RunContentProcess(
+@@ -300,6 +375,9 @@ NO_STACK_PROTECTOR int RunContentProcess(
      // Enable spatial navigation; we interpret remote control swipes as arrow
      // keys.
      command_line->AppendSwitch(switches::kEnableSpatialNavigation);
@@ -115,4 +134,5 @@ index 0fd60fa820805069ff01a2442f14de2b5e984e5a..edb9525348ca44e758d3f6f7547bf474
  #endif
  
 -- 
-ios-blink-sideload
+2.54.0 (Apple Git-157)
+

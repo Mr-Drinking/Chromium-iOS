@@ -48,11 +48,13 @@ IOSChromeMain()                       ios/chrome/app/startup/ios_chrome_main.mm
 | 参数 | 作用 |
 |---|---|
 | `--single-process` | 渲染、GPU、网络都在本进程的线程里跑，不需要扩展进程 |
-| `--js-flags=--jitless --wasm-jitless --max-old-space-size=… --max-semi-space-size=…` | V8 不生成机器码；堆上限按内存分档，4 GB 机型是 384/16 MB（沿用 Blinker Fluid 的实测值） |
+| `--js-flags=--jitless --max-old-space-size=… --max-semi-space-size=…` | V8 不生成机器码；堆上限按内存分档，4 GB 机型是 384/16 MB（沿用 Blinker Fluid 的实测值）。不能加 `--wasm-jitless`：这个参数只有编了 DrumBrake 才存在（而且编了的话 `--jitless` 会自动带上），V8 遇到不认识的参数会忽略它后面的全部参数，堆上限就没了 |
 | `--disable-gpu-watchdog` | 单进程里 GPU 看门狗杀掉慢线程等于杀掉整个 app |
 | `--force-gpu-mem-available-mb=384`（4 GB 机型） | 限制图块缓存，避免重网页把进程推过 jetsam 上限 |
 | `--enable-features=WebContentsDiscard` | 允许丢弃后台标签页 |
-| `--disable-features=avfoundation-overlays,BackForwardCache` | 原生视频层要额外修复才能在进程内图层树里正常显示；前进后退缓存会把整页留在内存里 |
+| `--disable-features=avfoundation-overlays,BackForwardCache,NetTaskScheduler` | 原生视频层要额外修复才能在进程内图层树里正常显示；前进后退缓存会把整页留在内存里。NetTaskScheduler 见下 |
+
+**为什么关 NetTaskScheduler**（2026-10-27 在模拟器里踩到，验证过）：单进程时，content 的网络服务跑在进程内的专用线程上，它的 `NetTaskScheduler` 会把这个线程的调度队列装成全进程共用的 `net::GetTaskRunner()`（`net/base/scheduler/net_task_scheduler.cc`）。但 Chrome iOS 自己的 ios/web 层还有一个 `NetworkContext` 跑在 IO 线程上（`ios/web/network_context_owner.cc`，地址栏建议、新标签页都走它），它创建的 `URLLoader` 会拿到专用线程的 runner。开着 DCHECK 时，启动后约 1 秒就崩在 `mojo::SimpleWatcher` 的断言上；关着 DCHECK 也是真实的线程错配。官方是多进程，网络服务在单独的进程里，所以碰不到。关掉这个 feature 后，每个 `URLLoader` 都用自己所在线程的 runner，这是上游支持的回退路径（`net/base/task/task_runner.cc`）。
 
 已有的同名参数不会被覆盖（`--js-flags`、`--force-gpu-mem-available-mb` 已存在则跳过，feature 列表是追加）。
 
@@ -84,7 +86,7 @@ ANGLE 只在 GL 初始化时要一次 Metal 设备，拿到 nil 就整个进程�
 | `ios_enable_code_signing = false`（真机） | 产出未签名的 .app，由侧载工具用你的 Apple ID 签 |
 | `ios_enable_*_extension = false` 等 8 项 | 关掉 Chrome 自带的分享、小组件、密码填充等扩展；侧载时每个扩展都要占一个 App ID |
 | `v8_enable_sandbox = false`，`cppgc_enable_caged_heap = false` | 两者都要预留很大的虚拟地址空间，侧载 app 未必有 extended-virtual-addressing（Blinker Fluid 在真机上用的就是这组） |
-| `v8_enable_drumbrake = true` | 免 JIT 时 WebAssembly 用 DrumBrake 解释器跑；`v8/gni/v8.gni` 里 tvOS 也是这么配的 |
+| `v8_enable_drumbrake = false` | 本来想开：免 JIT 时 WebAssembly 要靠 DrumBrake 解释器跑，tvOS 也是这么配的。但 DrumBrake 在固定版本的 V8 上编不过（`Managed::raw()` 少了 `no_gc` 参数、`TrustedCast<>` 用在了非受信任类型上），V8 2026-10-26 的 main 也一样（验证过）。所以暂时关掉，代价是免 JIT 时没有 WebAssembly |
 
 `v8/gni/v8.gni` 里 tvOS（"runs in single process mode and is not allowed to use JIT"）的配置还有 `v8_enable_lite_mode = true`、`v8_enable_turbofan = false`。我们没开：它们能让包更小，但以后想加 JIT 就得重新编。如果内存吃紧可以试。
 

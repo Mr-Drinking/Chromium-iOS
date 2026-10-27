@@ -10,7 +10,7 @@
 
 - 用中文交流。
 - 手机：iPhone 13 mini（A15，4 GB 内存），**iOS 27**。
-- Mac：MacBook Air（M5，16 GB）。Xcode 27.1 在外置盘上；系统的 `xcode-select` 有意保持 Command Line Tools，**不要改**，脚本通过 `scripts/config.local.sh` 里的 `DEVELOPER_DIR` 用外置盘的 Xcode。网络走本地代理。
+- Mac：MacBook Air（M5，16 GB）。Xcode 27.1 在外置盘上；系统的 `xcode-select` 有意保持 Command Line Tools，**不要改**，脚本通过 `scripts/config.local.sh` 里的 `DEVELOPER_DIR` 用外置盘的 Xcode。网络走本地代理。编译并行数设成 5（`config.local.sh` 里的 `BUILD_JOBS`）：默认的 10 路会把 16 GB 内存耗尽，机器卡死。长时间的编译要脱离会话运行（`setsid`），否则会话一退出就会被连带打断。
 - 想要 Chrome iOS 的原生界面；明确不想要 Blinker Fluid 那种自绘界面。
 
 ## 已定决策（除非用户提出，不要推翻或重新讨论）

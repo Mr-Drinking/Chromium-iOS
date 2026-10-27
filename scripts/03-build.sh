@@ -33,9 +33,9 @@ fi
 note "gn gen $out  (args from ${args_file#"$REPO_ROOT"/})"
 gn gen "$out"
 
-note "building: $targets"
+note "building: $targets${BUILD_JOBS:+ (-j $BUILD_JOBS)}"
 # shellcheck disable=SC2086  # targets is a word list on purpose
-autoninja -C "$out" $targets
+autoninja -C "$out" ${BUILD_JOBS:+-j "$BUILD_JOBS"} $targets
 
 for t in $targets; do
   case "$t" in

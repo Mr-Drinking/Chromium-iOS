@@ -53,11 +53,14 @@ scripts/04-run-simulator.sh content_shell
 ```bash
 scripts/02-apply-patches.sh          # 加 --with-optional 会连可选补丁一起打
 scripts/03-build.sh sim              # 默认目标就是 chrome，产物 Chromium.app
-scripts/04-run-simulator.sh          # 默认 "iPhone 16" 模拟器，第二个参数可换
+scripts/04-run-simulator.sh          # 默认 "iPhone 16"，建不出来就自动用现有的 iPhone 模拟器；第二个参数可换
 ```
 
 - `02-apply-patches.sh` 会在 `src` 里新建（或重置）分支 `ios-blink-sideload`，然后按 `patches/series` 依次 `git am --3way`。重跑会从固定版本重新打一遍。
 - 第一次完整编译要几个小时，之后是增量编译。
+- **16 GB 内存的 Mac 要限制并行数**：在 `scripts/config.local.sh` 写上 `: "${BUILD_JOBS=5}"`。默认按 CPU 核数（10 路），加上 siso 自己的约 2 GB，会把内存耗尽、机器卡死，编译反而慢几十倍（验证过）。
+- 编译要跑几个小时，最好让它脱离启动它的终端或会话运行（比如用 `nohup`，或者在单独的终端窗口里跑），否则那边一关，编译就会被打断。重跑会从断点继续。
+- 跳过 Chrome 的首次引导：`xcrun simctl spawn <udid> defaults write <bundle id> FirstRunForceDisabled -bool YES`，然后重启 app（验证过）。不开窗口也能用 `xcrun simctl io <udid> screenshot x.png` 截图。
 - `04-run-simulator.sh` 用 `simctl launch --console-pty` 启动，app 的 stdout/stderr 直接显示在终端里。也可以用编译产物里的 `iossim`：`out/Release-iphonesimulator-blink/iossim -i out/Release-iphonesimulator-blink/Chromium.app`。
 
 想确认补丁生效：日志里能看到 renderer、GPU 都是本进程里的线程，不会尝试启动扩展进程。
@@ -103,7 +106,11 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.i
 | 用一会儿被系统杀掉 | jetsam 内存上限：调低 0001 里的堆和 GPU 内存参数，少开标签页 |
 | 视频黑屏 | 原生视频层；0001 已默认关闭 `avfoundation-overlays`，若仍黑屏需移植 `ca_renderer_layer_tree.mm` 的修复 |
 | 启动时崩在 app group / 共享容器相关代码 | 未签名的包不带权限声明，侧载工具没开通应用组：用 `scripts/05-package-ipa.sh --with-app-groups` 重新打包再装 |
+| 编译时机器卡顿、一大堆 `python3` 进程、内存几乎用光（遇到过） | Blink 的 `generate_bindings.py` 每次调用会按 CPU 核数开 `multiprocessing` 进程，几个这样的步骤同时跑，就是几十个各占 100–200 MB 的进程。这个阶段只在完整编译时出现一次；配合 `BUILD_JOBS=5`，16 GB 的机器撑得住 |
 | `gn gen` 报 `Assignment had no effect`，指向 `ios/chrome/app/BUILD.gn` 的 `_extension_toolchain`（遇到过） | 扩展全关时上游 GN 会报这个错，补丁 0004 修的就是它；确认 0004 已经打上 |
+| Chrome 在模拟器里启动约 1 秒就崩，日志是 `simple_watcher.cc` 的 DCHECK `RunsTasksInCurrentSequence()`，栈里有 `network::URLLoader` 和 `BrowserProcessIOThread`（遇到过） | 单进程下 `NetTaskScheduler` 造成的线程错配（见 architecture.md 的 0001 一节）。确认 0001 里有 `--disable-features=…NetTaskScheduler` |
+| 创建模拟器报 `Incompatible device`（遇到过） | 当前模拟器运行时不支持这个机型（本机 iOS 27.1 运行时只支持 "iPhone Duo"）。`xcrun simctl list runtimes -j` 里的 `supportedDeviceTypes` 列出了可用机型；`04-run-simulator.sh` 会自动改用现有的 iPhone 模拟器 |
+| `Unable to find application named 'Simulator'`（遇到过） | Xcode 27 不再带 Simulator.app，模拟器窗口换成了 `Xcode.app/Contents/Applications/DeviceHub.app`。`04-run-simulator.sh` 现在会按路径打开它。不开窗口也不影响运行，可以用 `xcrun simctl io booted screenshot x.png` 截图 |
 | `gclient sync` 报 `git-lfs: command not found`（遇到过，在 `third_party/litert/src`） | 全局 git 配置里有 `git lfs install` 留下的"必需"过滤器，但没装 git-lfs。`scripts/config.sh` 已经让脚本里的 git 把 LFS 文件检出成指针，跟官方构建机一样（LiteRT 里的 LFS 文件是用不到的预编译库）。在终端里手动跑 `gclient` 前，先 `source scripts/config.sh` |
 
 ## 7. 修改补丁

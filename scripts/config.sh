@@ -34,6 +34,11 @@ BUNDLE_ID_PREFIX="${BUNDLE_ID_PREFIX:-com.example.iosblink}"
 OUT_SIM="${OUT_SIM:-out/Release-iphonesimulator-blink}"
 OUT_DEVICE="${OUT_DEVICE:-out/Release-iphoneos-blink}"
 
+# Parallel build jobs; empty lets autoninja decide (one per CPU core). A heavy
+# compile can take 1-2 GB and siso itself a few GB, so lower this on a 16 GB
+# Mac or the build ends up swapping.
+BUILD_JOBS="${BUILD_JOBS:-}"
+
 # Local branch (in src/, and in src/v8 etc. if a patch targets them) holding
 # the applied patch series.
 PATCH_BRANCH="${PATCH_BRANCH:-ios-blink-sideload}"

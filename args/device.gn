@@ -37,6 +37,8 @@ ios_enable_push_notification_service_extension = false
 v8_enable_sandbox = false
 cppgc_enable_caged_heap = false
 
-# No JIT without BrowserEngineKit (patch 0001 passes --jitless); DrumBrake is
-# V8's WebAssembly interpreter, which is what the tvOS port uses for Wasm.
-v8_enable_drumbrake = true
+# No JIT without BrowserEngineKit (patch 0001 passes --jitless). DrumBrake,
+# the WebAssembly interpreter the tvOS port uses to run Wasm without JIT,
+# doesn't compile at the pinned V8 (nor at V8 main on 2026-10-26: stale
+# Managed::raw() and TrustedCast<> calls), so for now jitless means no Wasm.
+v8_enable_drumbrake = false
