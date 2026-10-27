@@ -1,0 +1,237 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 21:43:11 +0800
+Subject: [PATCH] iOS sideload: don't shrink the web view for the keyboard
+
+With Blink, the on-screen keyboard shrank the web view: Chrome's
+fullscreen code adds the keyboard's height to the web view's bottom
+inset, which content applies to the view's frame. The page's layout
+viewport (innerHeight) therefore changed whenever the keyboard showed,
+hid or changed height, and the page was laid out again each time; the
+translucent keyboard had nothing behind it but an empty area. In
+WKWebView the inset only marks part of the view as obscured.
+
+With Blink, leave the keyboard out of the inset. Content then handles
+the keyboard as Safari and Chrome for Android do: it takes the part of
+the view the keyboard covers off the visual viewport only, and scrolls
+the focused field into view. For that to work:
+- Count the input accessory bar (previous, next, done) as part of the
+  keyboard. Leaving it out let Blink scroll a field to just behind it.
+- Ask for the scroll only once a frame with the new visible viewport is
+  active, as RenderWidgetHostViewAura does for its keyboard insets.
+  Asking right away, Blink scrolled for the old visible viewport, found
+  the field visible there and left it behind the keyboard.
+- Find where the view ends on screen from its scroll view, which stays
+  put. The view's own frame follows the page's scroll offset and moved
+  by a fraction of a point as the page scrolled, so the visible
+  viewport flipped by a point on every frame and Blink resized it each
+  time.
+
+Also stop -[RenderWidgetUIView showKeyboard:withBounds:] from setting
+the view's frame to its bounds. The view sits at the scroll offset in
+its scroll view, so this moved it to the top of the page until the next
+frame put it back.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator with the
+on-screen Pinyin keyboard and a page that logs the viewports: focusing
+a field near the bottom keeps innerHeight at 631 while the visual
+viewport goes to 314 and scrolls by 276 to center the field above the
+keyboard and the accessory bar, the same in three tries; typing
+"ni hao" and picking a candidate leaves the page where it is; Done
+brings the visual viewport back to 631. The page now shows behind the
+keyboard.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
+index 234ae36c8121cad8dc36cd58d3b8e4fedb20bf1c..fa8b9a090fe32b358bac415aedd834b057a35e5d 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios.h
+@@ -194,7 +194,7 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+   void OnRenderFrameMetadataChangedBeforeActivation(
+       const cc::RenderFrameMetadata& metadata) override;
+   void OnRenderFrameMetadataChangedAfterActivation(
+-      base::TimeTicks activation_time) override {}
++      base::TimeTicks activation_time) override;
+   void OnRenderFrameSubmission() override {}
+   void OnLocalSurfaceIdChanged(
+       const cc::RenderFrameMetadata& metadata) override {}
+@@ -296,6 +296,10 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+   std::optional<gfx::PointF> last_root_scroll_offset_;
+   bool is_scrolling_ = false;
+ 
++  // [ios-blink-sideload] The surface id of the visible viewport for the
++  // keyboard, until a frame with it is active.
++  viz::LocalSurfaceId keyboard_surface_id_;
++
+   // This stores the underlying view bounds. The UIView might change size but
+   // we do not change its size during scroll.
+   gfx::Rect view_bounds_;
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index dbbdeddc0a0da5d076913aff5a9313fb6485df4f..5a1499242744849a21071ae6c5d4c29f359afb78 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -1035,16 +1035,37 @@ bool IsTesting() {
+ 
+ #if !BUILDFLAG(IS_IOS_TVOS)
+ void RenderWidgetHostViewIOS::OnKeyboardVisibilityChanged() {
+-  host()->SynchronizeVisualProperties();
+-
++  // [ios-blink-sideload] As RenderWidgetHostViewAura::SetInsets() does, give
++  // the new visible viewport a new surface id, and scroll the focused field
++  // into view only once a frame with it is active (see
++  // OnRenderFrameMetadataChangedAfterActivation()). Now that the keyboard no
++  // longer resizes the view, Blink got the request to scroll before the new
++  // visible viewport, found the field visible in the old one, and left it
++  // behind the keyboard.
+   if ([ui_view_->view_ keyboardHeight] > 0) {
+-    auto* input_handler = GetFrameWidgetInputHandlerForFocusedWidget();
+-    if (input_handler) {
++    browser_compositor_->ForceNewSurfaceId();
++    keyboard_surface_id_ = GetLocalSurfaceId();
++  } else {
++    keyboard_surface_id_ = viz::LocalSurfaceId();
++    host()->SynchronizeVisualProperties();
++  }
++}
++#endif  // !BUILDFLAG(IS_IOS_TVOS)
++
++void RenderWidgetHostViewIOS::OnRenderFrameMetadataChangedAfterActivation(
++    base::TimeTicks activation_time) {
++  // [ios-blink-sideload] See OnKeyboardVisibilityChanged().
++  const cc::RenderFrameMetadata& metadata =
++      host()->render_frame_metadata_provider()->LastRenderFrameMetadata();
++  if (keyboard_surface_id_.is_valid() && metadata.local_surface_id &&
++      metadata.local_surface_id->is_valid() &&
++      metadata.local_surface_id->IsSameOrNewerThan(keyboard_surface_id_)) {
++    keyboard_surface_id_ = viz::LocalSurfaceId();
++    if (auto* input_handler = GetFrameWidgetInputHandlerForFocusedWidget()) {
+       input_handler->ScrollFocusedEditableNodeIntoView();
+     }
+   }
+ }
+-#endif  // !BUILDFLAG(IS_IOS_TVOS)
+ 
+ void RenderWidgetHostViewIOS::ExtendSelectionAndDelete(int32_t before,
+                                                        int32_t after) {
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index c80c22520b496841cf343a8f713dfd39389d6ba4..6fcd8e1991dfabfc84e20edfeebabed0a7745f90 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -5,6 +5,7 @@
+ #include "content/browser/renderer_host/render_widget_host_view_ios_uiview.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ 
+ #include "base/apple/foundation_util.h"
+ #include "base/strings/sys_string_conversions.h"
+@@ -401,9 +402,22 @@ - (CGFloat)keyboardOverlap {
+     return 0;
+   }
+   CGFloat keyboardTop = CGRectGetMaxY(window.bounds) - _keyboardHeight;
+-  CGFloat viewBottom =
+-      CGRectGetMaxY([self convertRect:self.bounds toView:window]);
+-  return std::clamp(viewBottom - keyboardTop, CGFloat(0), _keyboardHeight);
++  // [ios-blink-sideload] Find where this view ends from its scroll view, which
++  // stays put. This view's own frame follows the page's scroll offset (see
++  // UpdateFrameBounds()), and on screen it moved by a fraction of a point as
++  // the page scrolled; the visible viewport then changed by a point, back and
++  // forth, and Blink resized it on every frame.
++  CGFloat viewBottom;
++  if (UIScrollView* scrollView =
++          base::apple::ObjCCast<UIScrollView>(self.superview)) {
++    viewBottom =
++        CGRectGetMaxY([scrollView convertRect:scrollView.bounds toView:window]) -
++        scrollView.contentInset.bottom;
++  } else {
++    viewBottom = CGRectGetMaxY([self convertRect:self.bounds toView:window]);
++  }
++  return std::clamp(std::round(viewBottom - keyboardTop), CGFloat(0),
++                    _keyboardHeight);
+ }
+ 
+ - (void)keyboardWillChangeFrame:(NSNotification*)notification {
+@@ -426,8 +440,11 @@ - (void)keyboardWillChangeFrame:(NSNotification*)notification {
+ 
+   CGFloat visibleHeight =
+       CGRectIntersection(keyboardFrameInWindow, window.bounds).size.height;
+-  CGFloat accessoryHeight = _inputAccessoryContainerView.frame.size.height;
+-  _keyboardHeight = std::max(visibleHeight - accessoryHeight, 0.0);
++  // [ios-blink-sideload] Count the input accessory bar (previous, next, done)
++  // as part of the keyboard: with the web view no longer ending above the
++  // keyboard, leaving it out let Blink scroll a focused field to just behind
++  // the bar.
++  _keyboardHeight = visibleHeight;
+   _view->OnKeyboardVisibilityChanged();
+ }
+ 
+@@ -1790,7 +1807,9 @@ - (void)handleDoneAccessoryAction {
+ }
+ 
+ - (void)showKeyboard:(bool)has_text withBounds:(CGRect)bounds {
+-  self.frame = bounds;
++  // [ios-blink-sideload] Don't set the frame to `bounds`: this view sits at
++  // the scroll offset in its scroll view (see UpdateFrameBounds()), so moving
++  // it to the origin made the page jump whenever a field was tapped.
+   [self reloadInputViews];
+ }
+ 
+diff --git a/ios/chrome/browser/fullscreen/model/BUILD.gn b/ios/chrome/browser/fullscreen/model/BUILD.gn
+index 64a4a6f68907dc6f84d041ceba79d9178f8e9ba0..ba6031398ebb2b8db73ca8ad644160ecab110ad4 100644
+--- a/ios/chrome/browser/fullscreen/model/BUILD.gn
++++ b/ios/chrome/browser/fullscreen/model/BUILD.gn
+@@ -15,6 +15,7 @@ source_set("model") {
+   ]
+   deps = [
+     "//base",
++    "//build:blink_buildflags",
+     "//ios/chrome/browser/fullscreen/public:metrics",
+     "//ios/chrome/browser/shared/model/browser",
+     "//ios/chrome/browser/shared/public/commands",
+diff --git a/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm b/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
+index f76079c0e01c53567b10a202d6ad155af95ceeb3..1d12e1fe67068b3175ed87cfdf8e26a61df1780b 100644
+--- a/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
++++ b/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
+@@ -13,6 +13,7 @@
+ #import "base/functional/callback_helpers.h"
+ #import "base/metrics/histogram_functions.h"
+ #import "base/not_fatal_until.h"
++#import "build/blink_buildflags.h"
+ #import "ios/chrome/browser/fullscreen/model/fullscreen_constants.h"
+ #import "ios/chrome/browser/fullscreen/model/fullscreen_progress_animator.h"
+ #import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
+@@ -21,6 +22,14 @@
+ 
+ namespace {
+ 
++// [ios-blink-sideload] Whether the keyboard adds to the web view's bottom
++// inset. Not with Blink: there, an inset shrinks the web view, so the page was
++// laid out again whenever the keyboard showed, hid or changed height, and the
++// translucent keyboard had nothing behind it. Blink handles the keyboard
++// itself, by shrinking only the visual viewport (as Safari and Chrome for
++// Android do).
++constexpr bool kKeyboardInsetsWebView = !BUILDFLAG(USE_BLINK);
++
+ // Updates the fractional `progress` of the fullscreen UI layer by interpreting
+ // a `scroll` distance. Evaluates the `scroll` as a percentage of the total
+ // compressible space (`delta`) and clamps the result between 0.0 (fullscreen)
+@@ -390,7 +399,7 @@ constexpr FullscreenState SettledStateForTransition(
+   }
+ 
+   // Apply keyboard height as overlapping.
+-  if (keyboard_obscured_inset_ > 0) {
++  if (kKeyboardInsetsWebView && keyboard_obscured_inset_ > 0) {
+     insets_.bottom = std::max(insets_.bottom, keyboard_obscured_inset_);
+   }
+ 
+@@ -552,7 +561,7 @@ constexpr FullscreenState SettledStateForTransition(
+   }
+ 
+   // Apply keyboard height as overlapping.
+-  if (keyboard_obscured_inset_ > 0) {
++  if (kKeyboardInsetsWebView && keyboard_obscured_inset_ > 0) {
+     min_insets_.bottom = std::max(min_insets_.bottom, keyboard_obscured_inset_);
+     max_insets_.bottom = std::max(max_insets_.bottom, keyboard_obscured_inset_);
+   }
+-- 
+2.54.0 (Apple Git-157)
+

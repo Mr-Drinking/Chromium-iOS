@@ -77,13 +77,16 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 - 打开网址最稳的办法：`xcrun simctl openurl <udid> 'chromium://example.com'`（`chromiums://` 是 https），然后 `axe tap --label '打开'` 点系统确认框。直接在地址栏里输入，容易被键盘的自动修正气泡挡住建议行。
 - 模拟器里的 app 能直接访问 Mac 的 `localhost`，本地起个 `python3 -m http.server` 放测试页就行。
 - 注意：AXe 会激活无障碍功能，可能触发只有开 VoiceOver 才会碰到的 bug（补丁 0007 就是这么发现的）。
-- **iPhone 13 mini 模拟器上 AXe 的点击坐标偏大约 4%**：屏幕实际是 360×780 点的分辨率，iOS 却按 375×812 点排版，AXe 按前者换算，`axe tap -x 188 -y 704` 实际落在 (196, 733)，越靠下偏得越多。按坐标点击要先乘 0.96；`describe-ui` 给出的元素坐标是 UIKit 的，不用换算（2026-10-27 用记录命中视图的调试版查明）。
+- **iPhone 13 mini 模拟器上 AXe 的点击坐标偏大约 4%**：屏幕实际是 360×780 点的分辨率，iOS 却按 375×812 点排版，AXe 按前者换算，`axe tap -x 188 -y 704` 实际落在 (196, 733)，越靠下偏得越多。UIKit 坐标（`describe-ui` 给出的就是）要先乘 0.96 再交给 `axe tap`；从截图量的坐标（截图像素除以 3）不用换算（2026-10-27 用记录命中视图的调试版查明，点编辑菜单项时又确认过）。
 - 网页里的文字不在 AXe 读到的界面结构里，要看网页状态就截图，或者让测试页把要看的数据画在页面顶部。
 - 查 Chrome 网页脚本的问题：Blink 版所有注入脚本都跑在网页自己的 JS 环境里，测试页可以直接检查 `window.__gCrWeb`，还能包一层 `__gCrWeb.callFunctionInGcrWeb`（原生调网页）和 `window.webkitMessageHandler.postMessage`（网页发给原生）把往来记下来（补丁 0008 的翻译问题就是这么查的）。
 - 查触摸和滚动：测试页监听 `touchstart`/`touchmove`/`touchend`/`touchcancel` 和 `scroll`，把计数和 `scrollY` 画在固定的浮层里，再用 `axe swipe --duration 1 --delta 4` 慢拖、`--duration 0.15` 快划（补丁 0011 就是这么查出来的）。
 - 长按：`axe touch -x <x> -y <y> --down --up --delay 1.2`；组合键：`axe key-combo --modifiers 227 --key 6`（Cmd+C；227 是左 Command，225 是左 Shift，字母键码 a=4…z=29，回车是 `axe key 40`）。中文输入法开着时，在地址栏输完网址要按两次回车（第一次只是上屏）。
 - 测屏幕键盘：AXe 的 `type`/`key` 发的是实体键盘事件，用过之后模拟器就认为接着实体键盘，屏幕键盘不再弹出。要测屏幕键盘，先 `xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool NO`（再把 `AutomaticMinimizationEnabled` 也设成 NO），重启模拟器（`simctl shutdown` 再 `boot`），之后只用点击，按屏幕键盘上的键打字（键的位置从 `describe-ui` 读）。打开网页用 `simctl openurl`，不要在地址栏里用 `axe type`（补丁 0017 就是这么测的）。
 - 查下载：下好的文件在 `xcrun simctl get_app_container <udid> <bundle id> data` 下的 `Documents/`，下载中的临时文件在同一目录的 `tmp/downloads/<UUID>/*.crdownload`。测"下载中途"要一个慢的服务器，本地写个每 0.2 秒发 20 KB 的 HTTP 服务就行，它还能记下对方是否中途断开（补丁 0013 就是这么测的）。
+- 查 UIKit 和 BrowserEngineKit 的内部状态：用 lldb 附加到模拟器里的 app，不用重编（补丁 0019 就是这么查的）。`xcrun lldb --batch -o "process attach --pid $(pgrep -f Chromium.app/Chromium)" -o 'expr -l objc -O -- (id)[[[[[[UIApplication sharedApplication] connectedScenes] anyObject] windows] firstObject] recursiveDescription]' -o detach` 打印视图层级；`[对象 _ivarDescription]` 打印私有成员；也能直接调方法看结果（返回结构体的要先 `expr -l objc -- @import UIKit`）。附加期间 app 是暂停的，`detach` 后继续。Release 版里打断点不好用：链接器把代码相同的函数合并了，按名字设的断点会命中一堆无关函数，还把 app 拖得很慢。
+- 测键盘时测试页要同时监听 `scroll` 和 `visualViewport` 的 `resize`、`scroll`：键盘出现后滚动的是可视视口，`window` 不会收到 `scroll`（补丁 0020 测试时漏了这一点，误以为没滚动）。
+- 切换深色/浅色：`xcrun simctl ui <udid> appearance dark`（或 `light`），网页开着也会立刻收到变化。
 - 模拟器里的 Chromium 走 Mac 的系统代理（补丁 0009），系统代理开着就能打开 Google；需要对照时，`xcrun simctl openurl` 打开 http(s) 网址会用模拟器里的 Safari。
 
 ## 4. 真机

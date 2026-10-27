@@ -1,0 +1,369 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 21:43:14 +0800
+Subject: [PATCH] iOS sideload: follow the system's dark mode in web pages
+
+Pages always saw a light system: prefers-color-scheme never matched
+dark, and pages that support a dark color scheme stayed light. iOS had
+no ui::OsSettingsProvider, so NativeTheme never learned the system's
+appearance, and IOSContentBrowserClient never set the preferred color
+scheme in the web preferences, which default to light.
+
+Add OsSettingsProviderIOS, which reads the light or dark appearance of
+the app's window scenes and notifies when it changes (trait change
+registration on each window scene; scenes that connect later are
+picked up when they activate). IOSContentBrowserClient now sets the
+pages' preferred color scheme from NativeTheme, and asks for the web
+preferences to be updated when it changes.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator: with a
+page that uses prefers-color-scheme and color-scheme: light dark,
+switching the system appearance (simctl ui appearance) turns the page,
+its media query, matchMedia listener and form controls dark and back
+while it is open, and pages opened in dark mode load dark. google.com
+stays light here, as it does in Safari on the same simulator (its own
+dark theme setting).
+
+diff --git a/ios/web/content/init/BUILD.gn b/ios/web/content/init/BUILD.gn
+index 818981f5f6ff8be6be54621919fd6b105289e148..a07b69d29f83b92077103b2aab9b52b90ec1ae6e 100644
+--- a/ios/web/content/init/BUILD.gn
++++ b/ios/web/content/init/BUILD.gn
+@@ -42,6 +42,8 @@ source_set("init") {
+     "//ios/web/content/common:non_code_constants",
+     "//ios/web/public",
+     "//ios/web/public/init",
++    "//third_party/blink/public/common",
+     "//ui/base",
++    "//ui/native_theme",
+   ]
+ }
+diff --git a/ios/web/content/init/DEPS b/ios/web/content/init/DEPS
+index 181171727fe59e9eab2b071ca372972a9a85f03e..af2bb60d032e314d4a651d6873923c5d6696a4fd 100644
+--- a/ios/web/content/init/DEPS
++++ b/ios/web/content/init/DEPS
+@@ -10,8 +10,10 @@ include_rules = [
+   "+content/public/common",
+   "+content/public/renderer",
+   "+third_party/blink/public/common/switches.h",
++  "+third_party/blink/public/common/web_preferences/web_preferences.h",
+   "+third_party/blink/public/platform/web_url_error.h",
+   "+ui/base/resource/resource_bundle.h",
+   "+ui/base/webui/web_ui_util.h",
++  "+ui/native_theme/native_theme.h",
+   # keep-sorted end
+ ]
+diff --git a/ios/web/content/init/ios_content_browser_client.cc b/ios/web/content/init/ios_content_browser_client.cc
+index 43dbd46931289955968c3df8638a5b6cf412f12c..cd149998dc3a2a0bb18b427f32d38851e24f81de 100644
+--- a/ios/web/content/init/ios_content_browser_client.cc
++++ b/ios/web/content/init/ios_content_browser_client.cc
+@@ -9,6 +9,7 @@
+ #import "components/version_info/version_info.h"
+ #import "content/public/browser/browser_context.h"
+ #import "content/public/browser/devtools_manager_delegate.h"
++#import "content/public/browser/web_contents.h"
+ #import "content/public/browser/web_contents_view_delegate.h"
+ #import "content/public/common/url_constants.h"
+ #import "ios/web/content/common/constants.h"
+@@ -16,11 +17,22 @@
+ #import "ios/web/content/ui/web_contents_view_delegate_impl.h"
+ #import "services/network/public/mojom/network_context.mojom.h"
+ #include "third_party/blink/public/common/switches.h"
++#include "third_party/blink/public/common/web_preferences/web_preferences.h"
++#include "ui/native_theme/native_theme.h"
+ 
+ namespace web {
+ 
+ namespace {
+ 
++// [ios-blink-sideload] The color scheme pages should prefer: the system's
++// light or dark appearance, as in Safari.
++blink::mojom::PreferredColorScheme GetWebColorScheme() {
++  return ui::NativeTheme::GetInstanceForWeb()->preferred_color_scheme() ==
++                 ui::NativeTheme::PreferredColorScheme::kDark
++             ? blink::mojom::PreferredColorScheme::kDark
++             : blink::mojom::PreferredColorScheme::kLight;
++}
++
+ base::FilePath GetPartitionPath(content::BrowserContext* context,
+                                 const base::FilePath& relative_partition_path) {
+   base::FilePath path = context->GetPath();
+@@ -103,6 +115,26 @@ IOSContentBrowserClient::CreateDevToolsManagerDelegate() {
+   return std::make_unique<content::DevToolsManagerDelegate>();
+ }
+ 
++void IOSContentBrowserClient::OverrideWebPreferences(
++    content::WebContents* web_contents,
++    content::SiteInstance& main_frame_site,
++    blink::web_pref::WebPreferences* prefs) {
++  // [ios-blink-sideload] Pages follow the system appearance
++  // (prefers-color-scheme, and the default colors of pages that support dark
++  // mode). They were always light.
++  prefs->preferred_color_scheme = GetWebColorScheme();
++  prefs->preferred_root_scrollbar_color_scheme = prefs->preferred_color_scheme;
++}
++
++bool IOSContentBrowserClient::
++    WebPreferencesNeedUpdateForColorRelatedStateChanges(
++        content::WebContents& web_contents,
++        const content::SiteInstance& main_frame_site) const {
++  // [ios-blink-sideload] Called when the system appearance changes.
++  return web_contents.GetOrCreateWebPreferences().preferred_color_scheme !=
++         GetWebColorScheme();
++}
++
+ void IOSContentBrowserClient::ConfigureNetworkContextParams(
+     content::BrowserContext* context,
+     bool in_memory,
+diff --git a/ios/web/content/init/ios_content_browser_client.h b/ios/web/content/init/ios_content_browser_client.h
+index 4dee894188b2406c2a458e8d16045692b4490d56..80c2c1008821b97ab2ef8c4c495de1fc4c9ed300 100644
+--- a/ios/web/content/init/ios_content_browser_client.h
++++ b/ios/web/content/init/ios_content_browser_client.h
+@@ -30,6 +30,12 @@ class IOSContentBrowserClient : public content::ContentBrowserClient {
+       content::BrowserContext* context) override;
+   std::unique_ptr<content::DevToolsManagerDelegate>
+   CreateDevToolsManagerDelegate() override;
++  void OverrideWebPreferences(content::WebContents* web_contents,
++                              content::SiteInstance& main_frame_site,
++                              blink::web_pref::WebPreferences* prefs) override;
++  bool WebPreferencesNeedUpdateForColorRelatedStateChanges(
++      content::WebContents& web_contents,
++      const content::SiteInstance& main_frame_site) const override;
+   void ConfigureNetworkContextParams(
+       content::BrowserContext* context,
+       bool in_memory,
+diff --git a/ui/native_theme/BUILD.gn b/ui/native_theme/BUILD.gn
+index 25db8fc068fae15c145e4d471ec9975f06e2afa6..87248465f453f32460bdcfbf634498812ac1bc92 100644
+--- a/ui/native_theme/BUILD.gn
++++ b/ui/native_theme/BUILD.gn
+@@ -69,6 +69,15 @@ component("native_theme") {
+     ]
+   }
+ 
++  # [ios-blink-sideload] The system's light or dark appearance.
++  if (is_ios) {
++    frameworks = [ "UIKit.framework" ]
++    sources += [
++      "os_settings_provider_ios.h",
++      "os_settings_provider_ios.mm",
++    ]
++  }
++
+   if (is_chromeos) {
+     sources += [
+       "os_settings_provider_ash.cc",
+diff --git a/ui/native_theme/os_settings_provider.cc b/ui/native_theme/os_settings_provider.cc
+index af8cd5a64ec87eb5765a095e9e18e43bb42f769f..4b2ddcd10fffd3740c1c7f595ffb954a020ddb23 100644
+--- a/ui/native_theme/os_settings_provider.cc
++++ b/ui/native_theme/os_settings_provider.cc
+@@ -34,6 +34,8 @@
+ #elif BUILDFLAG(IS_WIN)
+ #include "base/win/win_util.h"
+ #include "ui/native_theme/os_settings_provider_win.h"
++#elif BUILDFLAG(IS_IOS)
++#include "ui/native_theme/os_settings_provider_ios.h"  // [ios-blink-sideload]
+ #endif
+ 
+ namespace ui {
+diff --git a/ui/native_theme/os_settings_provider.h b/ui/native_theme/os_settings_provider.h
+index 2bb1d3588422245ee77144785e01a5bcb330c3c7..a942f8cfec5cb54409b93cc2055efda2b8909418 100644
+--- a/ui/native_theme/os_settings_provider.h
++++ b/ui/native_theme/os_settings_provider.h
+@@ -30,6 +30,10 @@ using OsSettingsProviderImpl = OsSettingsProviderMac;
+ #elif BUILDFLAG(IS_WIN)
+ class OsSettingsProviderWin;
+ using OsSettingsProviderImpl = OsSettingsProviderWin;
++#elif BUILDFLAG(IS_IOS)
++// [ios-blink-sideload]
++class OsSettingsProviderIOS;
++using OsSettingsProviderImpl = OsSettingsProviderIOS;
+ #else
+ class OsSettingsProvider;
+ using OsSettingsProviderImpl = OsSettingsProvider;
+diff --git a/ui/native_theme/os_settings_provider_ios.h b/ui/native_theme/os_settings_provider_ios.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..0bfdf36bd17a36ee79ec09deaea2739f9090068d
+--- /dev/null
++++ b/ui/native_theme/os_settings_provider_ios.h
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_NATIVE_THEME_OS_SETTINGS_PROVIDER_IOS_H_
++#define UI_NATIVE_THEME_OS_SETTINGS_PROVIDER_IOS_H_
++
++#include <atomic>
++#include <memory>
++
++#include "base/component_export.h"
++#include "ui/native_theme/os_settings_provider.h"
++
++namespace ui {
++
++// [ios-blink-sideload] Reports the system's light or dark appearance, and when
++// it changes, so that web pages can follow it (prefers-color-scheme) as they
++// do in Safari. iOS had no provider, so pages always saw a light system.
++class COMPONENT_EXPORT(NATIVE_THEME) OsSettingsProviderIOS
++    : public OsSettingsProvider {
++ public:
++  explicit OsSettingsProviderIOS(
++      PriorityLevel priority_level = PriorityLevel::kProduction);
++  OsSettingsProviderIOS(const OsSettingsProviderIOS&) = delete;
++  OsSettingsProviderIOS& operator=(const OsSettingsProviderIOS&) = delete;
++  ~OsSettingsProviderIOS() override;
++
++  // OsSettingsProvider:
++  bool DarkColorSchemeAvailable() const override;
++  NativeTheme::PreferredColorScheme PreferredColorScheme() const override;
++
++ private:
++  // Starts observing the appearance of the app's window scenes. Main thread
++  // only.
++  void ObserveScenes();
++
++  // Reads the appearance again, and notifies observers if it changed. Main
++  // thread only.
++  void UpdateAppearance();
++
++  // Because this header is #included from C++ source, we can't use Obj-C here.
++  // Instead the Obj-C members are defined entirely in the .mm.
++  struct ObjCMembers;
++
++  std::unique_ptr<ObjCMembers> objc_members_;
++
++  // Whether the appearance is dark. Atomic because in single-process mode the
++  // renderer thread can read it too.
++  std::atomic<bool> dark_{false};
++};
++
++}  // namespace ui
++
++#endif  // UI_NATIVE_THEME_OS_SETTINGS_PROVIDER_IOS_H_
+diff --git a/ui/native_theme/os_settings_provider_ios.mm b/ui/native_theme/os_settings_provider_ios.mm
+new file mode 100644
+index 0000000000000000000000000000000000000000..12ea68265f1b60426660333c9a9e8e5edca52344
+--- /dev/null
++++ b/ui/native_theme/os_settings_provider_ios.mm
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/native_theme/os_settings_provider_ios.h"
++
++#import <UIKit/UIKit.h>
++
++#include "base/apple/foundation_util.h"
++
++namespace ui {
++
++namespace {
++
++// Whether the app's window scenes, and so the system, look dark. A scene in
++// the foreground decides.
++bool ScenesAreDark() {
++  bool dark = false;
++  for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
++    UIWindowScene* window_scene = base::apple::ObjCCast<UIWindowScene>(scene);
++    if (!window_scene) {
++      continue;
++    }
++    dark = window_scene.traitCollection.userInterfaceStyle ==
++           UIUserInterfaceStyleDark;
++    if (window_scene.activationState ==
++        UISceneActivationStateForegroundActive) {
++      break;
++    }
++  }
++  return dark;
++}
++
++}  // namespace
++
++struct OsSettingsProviderIOS::ObjCMembers {
++  // The trait change registration of each observed window scene.
++  NSMapTable<UIWindowScene*, id<UITraitChangeRegistration>>* __strong
++      registrations;
++  id __strong scene_activation_token;
++};
++
++OsSettingsProviderIOS::OsSettingsProviderIOS(PriorityLevel priority_level)
++    : OsSettingsProvider(priority_level),
++      objc_members_(std::make_unique<ObjCMembers>()) {
++  objc_members_->registrations = [NSMapTable weakToStrongObjectsMapTable];
++  if (NSThread.isMainThread) {
++    // No notification here: this runs while `Get()` creates the provider.
++    ObserveScenes();
++    dark_ = ScenesAreDark();
++    return;
++  }
++  __block auto provider = this;
++  dispatch_async(dispatch_get_main_queue(), ^{
++    provider->ObserveScenes();
++    provider->UpdateAppearance();
++  });
++}
++
++OsSettingsProviderIOS::~OsSettingsProviderIOS() {
++  if (objc_members_->scene_activation_token) {
++    [NSNotificationCenter.defaultCenter
++        removeObserver:objc_members_->scene_activation_token];
++  }
++  for (UIWindowScene* scene in objc_members_->registrations) {
++    [scene unregisterForTraitChanges:[objc_members_->registrations
++                                         objectForKey:scene]];
++  }
++}
++
++bool OsSettingsProviderIOS::DarkColorSchemeAvailable() const {
++  return true;
++}
++
++NativeTheme::PreferredColorScheme OsSettingsProviderIOS::PreferredColorScheme()
++    const {
++  return dark_ ? NativeTheme::PreferredColorScheme::kDark
++               : NativeTheme::PreferredColorScheme::kLight;
++}
++
++void OsSettingsProviderIOS::ObserveScenes() {
++  __block auto provider = this;
++  void (^observe)(UIScene*) = ^(UIScene* scene) {
++    UIWindowScene* window_scene = base::apple::ObjCCast<UIWindowScene>(scene);
++    NSMapTable* registrations = provider->objc_members_->registrations;
++    if (!window_scene || [registrations objectForKey:window_scene]) {
++      return;
++    }
++    id<UITraitChangeRegistration> registration = [window_scene
++        registerForTraitChanges:@[ [UITraitUserInterfaceStyle class] ]
++                    withHandler:^(id<UITraitEnvironment> environment,
++                                  UITraitCollection* previous) {
++                      provider->UpdateAppearance();
++                    }];
++    [registrations setObject:registration forKey:window_scene];
++  };
++  for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
++    observe(scene);
++  }
++  // Scenes connect after the app starts, and the appearance can change while
++  // the app is in the background.
++  objc_members_->scene_activation_token = [NSNotificationCenter.defaultCenter
++      addObserverForName:UISceneDidActivateNotification
++                  object:nil
++                   queue:nil
++              usingBlock:^(NSNotification* notification) {
++                observe(notification.object);
++                provider->UpdateAppearance();
++              }];
++}
++
++void OsSettingsProviderIOS::UpdateAppearance() {
++  bool dark = ScenesAreDark();
++  if (dark_.exchange(dark) != dark) {
++    NotifyOnSettingsChanged();
++  }
++}
++
++}  // namespace ui
+-- 
+2.54.0 (Apple Git-157)
+

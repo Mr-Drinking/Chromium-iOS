@@ -132,9 +132,11 @@ Blink 版的 `ContentBrowserContext::GetDownloadManagerDelegate()` 返回空。�
 
 ### 0015 文字的编辑菜单（`ios/web/content/ui/content_context_menu_controller.mm`）
 
-长按网页文字时，Blink 选中一个词并请求上下文菜单（`ShowContextMenu`，参数里有选中的文字、是否可编辑、可做的编辑操作 `edit_flags` 和选区的矩形）。ios/web/content 只会把请求转给 Chrome，而 Chrome 只为链接和图片做菜单，所以文字什么菜单都没有，触屏上没法拷贝；`RenderWidgetUIView` 自己的编辑菜单也没实现（上游注释 "Needs an edit menu implementation"）。补丁在请求里没有链接和图片、但有选中文字或来自输入框时，改用系统的 `UIEditMenuInteraction` 弹出编辑菜单：菜单项用 UIKit 建议的标准命令，所以标题跟着系统语言（中文是"拷贝""全选"），再按 `edit_flags` 过滤（拷贝要有选中文字，剪切和粘贴要在输入框里，粘贴还要剪贴板里有文字）。主框架的选区矩形作为菜单要避开的区域，菜单优先显示在选中文字上方。命令沿响应者链交给 `RenderWidgetUIView`，由 0014 补上的 `copy:` 等方法执行。每个网页视图只挂一个菜单交互；菜单关闭时通知 content 上下文菜单已关闭。
+长按网页文字时，Blink 选中一个词并请求上下文菜单（`ShowContextMenu`）。ios/web/content 只会把请求转给 Chrome，而 Chrome 只为链接和图片做菜单，所以文字什么菜单都没有，触屏上没法拷贝。补丁在请求里没有链接和图片、但有选中文字或来自输入框时，改为通过网页视图上 BrowserEngineKit 的文本交互（`BETextInteraction`）弹出系统的编辑菜单（`presentEditMenuForSelection`），也就是 Safari 用的那个；菜单里有哪些项、点了做什么，由网页视图决定（补丁 0019）。这个菜单不是 Blink 的上下文菜单，所以弹出后马上告诉 content 这次上下文菜单已经关闭。
 
-模拟器里验证过：长按普通文字弹出"拷贝 / 全选"，拷贝后系统剪贴板里是那个词；输入框里弹出"剪切 / 拷贝 / 粘贴 / 全选"，粘贴替换掉选中的词；"全选"后整页选中、菜单还在，再拷贝得到全文（含输入框里的值）；菜单显示在选区上方，第一行文字上方放不下时会盖到地址栏上（Safari 也是这样）；弹出菜单后滑动页面，菜单自动消失；长按链接仍然是 Chrome 的链接菜单。还没有选区拖柄，选区只能是一个词或全选。
+（2026-10-27 重写。第一版自己建了一个 `UIEditMenuInteraction`，只有"拷贝 / 全选"，没有选区拖柄，菜单经常压在地址栏上。用户在真机上觉得难用，要和 Safari 一致，于是改成用系统文本交互的菜单，配合 0019。）
+
+模拟器里验证过（和 0019 一起）：长按普通文字，选区上方弹出"拷贝 / 查询 / 翻译"，第二页是"共享…"；输入框里是"剪切 / 拷贝 / 粘贴 / 全选"；长按链接仍然是 Chrome 的链接菜单。
 
 ### 0016 停用无痕模式（`ios/chrome/browser/policy/model/policy_util.mm`）
 
@@ -144,7 +146,7 @@ content 的单进程模式只有一个进程内渲染器，也只支持一个浏
 
 屏幕键盘弹出时，Chrome 的工具栏收起逻辑（`FullscreenMediator`）把键盘高度当成网页底部被挡住的部分（`SetKeyboardObscuredInset`），加进网页视图的底部内边距。Blink 版里这个内边距直接决定网页视图的大小，视图被缩到了键盘上方（WebKit 版里同样的内边距只是告诉 WKWebView 哪块被挡住，视图大小不变）。content 的 `RenderWidgetHostViewIOS::GetVisibleViewportSize()` 又按 `RenderWidgetUIView` 自己记下的键盘高度，从可见区域里再减一次，可见区域（`visualViewport.height`）就成了 0。Blink 每次编辑后都要把光标滚进可见区域，区域为 0 时光标永远"看不见"，于是每输一个字页面就滚一屏（用户在真机上发现）。补丁给 `RenderWidgetUIView` 加了 `keyboardOverlap`：只算键盘实际挡住这个视图的那一段（键盘顶边到视图底边），可见区域只减这么多；要不要把焦点输入框滚进视野，仍按键盘是否弹出来判断。这样不管嵌入方有没有先把视图缩小，结果都对。
 
-模拟器里验证过（拼音屏幕键盘，测试页记录 `scrollY` 和可视视口）：之前聚焦后可视视口高度为 0，每按一个键页面滚约 420 px；之后可视视口为 314 px（键盘上方的网页视图），聚焦时把输入框滚进视野一次，之后打字、选候选字、收起键盘，页面都不动。键盘弹出时网页的布局视口也会跟着变矮（`innerHeight` 631→314，因为视图被缩小了），和 Safari 只缩可视视口的做法不同，没改。
+模拟器里验证过（拼音屏幕键盘，测试页记录 `scrollY` 和可视视口）：之前聚焦后可视视口高度为 0，每按一个键页面滚约 420 px；之后可视视口为 314 px（键盘上方的网页视图），聚焦时把输入框滚进视野一次，之后打字、选候选字、收起键盘，页面都不动。键盘弹出时网页的布局视口也会跟着变矮（`innerHeight` 631→314，因为视图被缩小了），和 Safari 只缩可视视口的做法不同，当时没改；后来补丁 0020 改了：键盘不再缩小网页视图，`keyboardOverlap` 也改成从外层滚动视图算。
 
 ### 0018 网络变化时立刻重读代理设置（`net/proxy_resolution/proxy_config_service_ios.cc`）
 
@@ -153,6 +155,49 @@ content 的单进程模式只有一个进程内渲染器，也只支持一个浏
 补丁让服务在第一次被观察（`AddObserver`）时登记 iOS 的网络配置变化通知（`notify_keys.h` 里的 `kNotifySCNetworkChange`，即 `com.apple.system.config.network_change`，公开接口），一收到就在使用它的线程上调用 `CheckForChangesNow()` 重读；轮询保留作兜底。没有通知时不做任何事，读一次设置也只是在后台线程调一次 `CFNetworkCopySystemProxySettings()`，开销可以忽略。登记放在 `AddObserver` 而不放在构造函数里，是因为有的实例在 UI 线程上创建、却在 IO 线程上使用（`PollingProxyConfigService` 里的 TODO 也提到了），第一版在构造函数里登记，回调发回了 UI 线程，撞上了轮询服务的线程检查（模拟器版开着 DCHECK 直接崩溃，验证过）。
 
 模拟器里验证过（临时测试版）：5 个实例（Chrome 自己的和网页的网络上下文）都登记成功；用同一条回调路径发一个测试通知，每个实例都在自己的线程上重读了设置，没有线程检查报错。模拟器里没法开关 VPN（`simctl spawn` 起的 `notifyutil` 连不上模拟器的通知服务，`com.apple.system.*` 的通知也只有 root 能发），真机上的效果要用户开关 Shadowrocket 来确认。
+
+### 0019 像 Safari 那样选择文字（`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`）
+
+`RenderWidgetUIView` 早就接了 BrowserEngineKit 的系统文本交互（`BETextInteraction`，Safari 的选区拖柄、放大镜、编辑菜单都由它来画），但实际不起作用：长按只选中一个词，没有拖柄。原因是系统文本交互自己保存一份选区（由 UIKit 的 `UITextSelectionDisplayInteraction` 和 `UIAsyncTextInteraction` 维护），而它从 `RenderWidgetUIView` 读到的选区一直是空的。用 lldb 附加到模拟器里的 app 逐个查出来的（方法见 build-guide.md）：
+
+- `BETextRange` 的起点返回的是终点，`comparePosition:toPosition:` 对任何两个位置都说相等，`offsetFromPosition:toPosition:` 总是 0，所以每个选区都被当成光标。现在位置带一个"离选区起点的偏移"（起点 0，终点为选中文字的长度），按它比较。
+- `beginningOfDocument` 返回 nil。UIKit 会把选区换算成"从文档开头算起的偏移"再换算回来（私有方法 `_nsrangeForTextRange:` / `_textRangeFromNSRange:`），换回来时丢了选区。content 只知道选区，不知道整篇文档，所以让选区本身充当文档：开头就是选区起点。
+- 系统那份选区要调 `refreshKeyboardUI` 才刷新，上游只在选中文字变化时调；Blink 先报文字、后报选区边界，所以刷新时拿到的是旧边界或者没有边界。现在边界变化时也刷新。`refreshKeyboardUI` 会顺带关掉编辑菜单，所以刷新前菜单开着的话，刷新后再弹出来（这是在模拟器里观察到的行为，不是文档写的）。
+- 非输入框里 `selectionClipRect` 返回 `CGRectNull`，系统把拖柄裁剪到空矩形里，全被裁掉，编辑菜单也找不到选区，只好放在视图顶上。现在返回视图的范围。
+- 拖柄画反了：`selectionRectsForRange:` 把终点标成了起点。
+
+拖柄能显示以后，拖动的逻辑也是错的：`adjustSelectionBoundaryToPoint:touchPhase:baseIsStart:flags:` 的 `baseIsStart` 意思是"起点不动、拖的是结尾手柄"，上游读反了，拖结尾手柄时动的是开头；而且"不动的那一端"每次都从正在变化的选区里重新取，两个手柄交叉后就漂走了。现在拖动开始时记下不动端（取边界线段的中点，顶端可能取整到上一行），之后一直用它；手柄越过不动端时告诉系统选区翻转了（按从左到右的文字判断）。松手时系统会自己弹出编辑菜单，但随后 Blink 报来的最终选区又会触发一次刷新、把菜单关掉，所以松手时记下"下次选区更新后再弹一次"。
+
+编辑菜单（`automaticallyPresentEditMenu` 改成 YES）照 Safari 的样子：
+
+- `canPerformAction:withSender:` 按当前选区回答（拷贝要有选中文字；剪切、粘贴、选择、学习…只在输入框里；粘贴还要剪贴板里有文字），而且只认这个类自己实现的动作：UIKit 用分类让所有视图都"能响应"一些私有动作（比如菜单里"翻译"用的 `_translate:`），对这个视图却什么也不做。"全选"只在输入框里出现（和 Safari 一样），但 Command-A（发送者是 `UIKeyCommand`）仍然能全选整页。
+- 系统菜单还会收进响应者链上其他对象能处理的命令，比如网页文字也出现"全选""自动填充"，"书写工具"也在（这个视图没有它要的文本访问能力）。所以在 `buildMenuWithBuilder:` 里过滤：命令要本视图能执行，非输入框去掉"自动填充"子菜单。
+- 菜单里的"查询""翻译"用的是 UIKit 的私有动作 `_define:`、`_translate:`，过滤时按名字换成 BrowserEngineKit 公开的 `lookup:`、`translate:`（保留系统的标题），分别调 `BETextInteraction` 的 `showDictionaryForTextInContext:…`（系统词典）和 `translateText:fromRect:`（Apple 翻译）；另外实现了 `share:`（共享）、`addShortcut:`（学习…）、`select:`（选择）。
+- "查询"只在系统拿得到选中文字时出现：`requestDocumentContext:completionHandler:` 原来返回 nil，现在返回选中文字和 Blink 报来的前后文。
+- 滚动时收起菜单，停下后再弹出；拖柄跟着文字走。选区清空时关掉菜单。
+
+模拟器里验证过（2026-10-27）：长按词语，两端出现拖柄，上方是"拷贝 / 查询 / 翻译"，第二页"共享…"；同一台模拟器里 Safari 是"拷贝 / 查询 / 翻译 / 查找"，展开后还有"搜索网页""拷贝高亮标记的链接"，这三项是 Safari 自己的功能，这里没有。拖结尾手柄向右、开头手柄向左、结尾手柄跨到下一行，选区都对，每次松手菜单回到新选区上方；拷贝后剪贴板里是选中的文字；"查询"弹出系统词典面板（模拟器里没装词典，和 Safari 一样显示"未找到内容"）；"翻译"弹出 Apple 翻译（第一次使用先要同意隐私说明）；滚动后菜单回到选区上方；点空白处选区、拖柄、菜单都消失；输入框里"粘贴"替换选中的词。没做的：Safari 的"查找""搜索网页"；放大镜（系统的手势都还关着，长按选词由 Blink 自己处理）。
+
+### 0020 键盘只缩小可视区域，不缩短页面（`ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm`、`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`）
+
+用户在真机上发现，屏幕键盘一出来页面布局就变短，和 iOS 26 起 Liquid Glass 的设计冲突（键盘是半透明的，后面应该看得到网页），而且网页卡来卡去。原因见 0017 一节：Chrome 把键盘高度加进网页视图的底部内边距，Blink 版据此把网页视图缩短，于是布局视口（`innerHeight`）变矮，每次键盘出现、收起、改变高度（比如候选栏变化）都要整页重新排版，键盘后面只剩空白。WKWebView 里同样的内边距只是标出"被挡住的部分"，视图不变。
+
+补丁在 Blink 版里不再把键盘加进内边距（`FullscreenBrowserAgent` 里的 `kKeyboardInsetsWebView`），由 content 自己处理键盘：可见区域扣掉键盘挡住的部分，再把焦点输入框滚进视野。这和 Safari、安卓 Chrome（`interactive-widget=resizes-visual`，默认值）的做法一样：布局视口不变，只有可视视口变小。要做对，还改了几处：
+
+- 键盘上方的"上一项 / 下一项 / 完成"按钮栏算作键盘的一部分。上游特意把它减掉了，以前视图被缩短时看不出问题，现在会把输入框滚到按钮后面。
+- 等新的可视区域生效后再请求滚动。上游在同步新尺寸后立刻请求 `ScrollFocusedEditableNodeIntoView`，两条消息走不同的通道，Blink 先收到滚动请求，按旧的可视区域判断输入框"看得见"，就不滚了（在 Blink 和 cc 里加日志确认过：判断时可视区域还是 1893 px 高）。现在照 `RenderWidgetHostViewAura::SetInsets()` 的做法：键盘出现或变高时分配一个新的 surface id（`ForceNewSurfaceId()`），等带这个 id 的帧激活（`OnRenderFrameMetadataChangedAfterActivation`）后再请求滚动。
+- 0017 的 `keyboardOverlap` 原来用网页视图自己的位置算它的底边，可网页视图的 frame 跟着页面的滚动偏移走（`UpdateFrameBounds()`），滚动时在屏幕上会偏零点几个点，可视区域高度就在 314 和 315 之间来回跳，每一帧都让 Blink 重新调一次可视视口、触发 resize 事件。现在从外层不动的滚动视图算，并取整。
+- `-[RenderWidgetUIView showKeyboard:withBounds:]` 把视图的 frame 设成自己的 bounds，也就是挪到滚动视图的原点；视图本该在滚动偏移处，所以每次点输入框，页面都会跳到顶上一帧再回来。删掉了这一句。
+
+模拟器里验证过（2026-10-27，拼音屏幕键盘，测试页记录布局视口和可视视口）：聚焦页面下方的输入框，`innerHeight` 保持 631，可视视口变成 314（键盘和按钮栏上方），并平滑滚动 276 把输入框居中，连试三次结果一样；打"ni hao"、选候选字上屏，页面不动；点"完成"后可视视口回到 631。半透明键盘后面看得到网页。改之前：`innerHeight` 631→314，键盘和按钮栏后面是一块灰色。真机待确认。
+
+### 0021 网页跟随系统的深色模式（`ui/native_theme/os_settings_provider_ios.mm`、`ios/web/content/init/ios_content_browser_client.cc`）
+
+网页一直以为系统是浅色：`prefers-color-scheme: dark` 从不匹配，支持深色的网页也是浅色。两处缺口：iOS 没有 `ui::OsSettingsProvider` 的实现（Mac、Windows、安卓都有），`NativeTheme` 不知道系统外观；iOS 的嵌入层（`IOSContentBrowserClient`）也不设网页偏好里的配色，而默认值是浅色。
+
+补丁新增 `OsSettingsProviderIOS`：读 app 窗口场景（`UIWindowScene`）的浅色/深色外观（有前台场景时以它为准），在每个场景上登记外观变化（iOS 17 起的 `registerForTraitChanges:`），后来连上的场景在激活时补登记；外观一变就通知 `NativeTheme`。结果存在原子变量里，单进程模式下渲染线程也会读。`IOSContentBrowserClient` 实现 `OverrideWebPreferences`，按 `NativeTheme` 设置网页的 `preferred_color_scheme`，并在外观变化时（`WebPreferencesNeedUpdateForColorRelatedStateChanges`）要求重算网页偏好。Chrome 自己的界面本来就跟随系统，不受影响。
+
+模拟器里验证过（2026-10-27）：测试页（`prefers-color-scheme`、`color-scheme: light dark`、`matchMedia` 监听）开着时用 `xcrun simctl ui <udid> appearance dark/light` 切换，页面、媒体查询、监听回调、表单控件都立刻跟着变；深色模式下新打开的网页直接是深色。google.com 在同一台模拟器里 Safari 和这里都是浅色（它自己的"深色主题"设置是"已停用"），不是这里的问题。
 
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 

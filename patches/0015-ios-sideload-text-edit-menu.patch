@@ -6,191 +6,47 @@ Subject: [PATCH] iOS sideload: show the system edit menu for text
 Long-pressing text in a page selected a word and nothing else, so there
 was no way to copy text with touch: Blink asks for a context menu, but
 ContentContextMenuController only shows the embedder's menu, and Chrome
-builds menus for links and images only. RenderWidgetUIView has no edit
-menu of its own ("Needs an edit menu implementation").
+builds menus for links and images only.
 
 When a context menu request has no link and no image but has selected
-text or comes from a text field, show the system edit menu
-(UIEditMenuInteraction) instead, next to the selection. It offers
-UIKit's own Cut, Copy, Paste and Select All commands, so their titles
-are localized, filtered by the request's edit flags (Paste also needs
-text on the pasteboard). They go through the responder chain to
-RenderWidgetUIView, which runs them as Blink edit commands.
+text or comes from a text field, present the system edit menu for the
+selection instead, the one Safari shows, through the web view's
+BrowserEngineKit text interaction. The web view decides which actions
+the menu offers and runs them (see patch 0019), and the menu is not a
+Blink context menu, so tell Blink this one is closed.
 
-Status: verified at Chromium 4558926c in the iOS 27 simulator: a long
-press on a word of text shows Copy and Select All, and Copy puts the
-word on the system pasteboard; in a text field it shows Cut, Copy,
-Paste and Select All, and Paste replaces the word; Select All selects
-the page and keeps the menu, and Copy then copies all of its text. A
-long press on a link still shows Chrome's link menu.
+Status: verified at Chromium 4558926c in the iOS 27 simulator, with
+patch 0019: a long press on a word of text shows Copy, Look Up and
+Translate (Share on the second page) over the selection; in a text
+field, Cut, Copy, Paste and Select All. A long press on a link still
+shows Chrome's link menu.
 
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
-index a2eff5aae23202f334ea0ec4338288b0cb4c80e8..21e10c93b74b7dd3c5b4b3162c48b9f0d1e9fef4 100644
+index a2eff5aae23202f334ea0ec4338288b0cb4c80e8..127a07e2adfdf93edbb2d2638a95f14fafef2ff6 100644
 --- a/ios/web/content/BUILD.gn
 +++ b/ios/web/content/BUILD.gn
-@@ -109,6 +109,7 @@ source_set("ui") {
-     "//content/public/browser",
+@@ -110,6 +110,7 @@ source_set("ui") {
      "//ios/web/public",
      "//ios/web/public/ui",
-+    "//third_party/blink/public/common",
    ]
++  frameworks = [ "BrowserEngineKit.framework" ]
  }
  
-diff --git a/ios/web/content/DEPS b/ios/web/content/DEPS
-index 62deeb521d826312867d742fc792c81ae65b0c2d..18b94e4ffdcda6cca72c93619d9cb49cbc7ab4e6 100644
---- a/ios/web/content/DEPS
-+++ b/ios/web/content/DEPS
-@@ -8,6 +8,9 @@ include_rules = [
-   # keep-sorted end
- ]
- specific_include_rules = {
-+  "content_context_menu_controller\\.mm": [
-+    "+third_party/blink/public/common/context_menu_data/edit_flags.h",
-+  ],
-   "content_web_state\\.mm": [
-     "+components/embedder_support/ios/delegate/color_chooser/color_chooser_ios.h",
-     "+components/embedder_support/ios/delegate/file_chooser/file_select_helper_ios.h",
+ test("ios_web_content_unittests") {
 diff --git a/ios/web/content/ui/content_context_menu_controller.mm b/ios/web/content/ui/content_context_menu_controller.mm
-index 3cfe9e543aa48a1d4bbe9a5e5a0687601008bb59..ad433dfc3777621f7951b19cbff68114c1431394 100644
+index 3cfe9e543aa48a1d4bbe9a5e5a0687601008bb59..1bdca76040d9b85d47518c21441ab81703573461 100644
 --- a/ios/web/content/ui/content_context_menu_controller.mm
 +++ b/ios/web/content/ui/content_context_menu_controller.mm
-@@ -5,6 +5,7 @@
+@@ -4,6 +4,7 @@
+ 
  #import "ios/web/content/ui/content_context_menu_controller.h"
  
++#import <BrowserEngineKit/BrowserEngineKit.h>
  #import <UIKit/UIKit.h>
-+#import <objc/runtime.h>
  
  #import "base/apple/foundation_util.h"
- #import "content/public/browser/context_menu_params.h"
-@@ -14,6 +15,7 @@
- #import "ios/web/public/ui/context_menu_params.h"
- #import "ios/web/public/web_state_delegate.h"
- #import "services/network/public/mojom/referrer_policy.mojom.h"
-+#import "third_party/blink/public/common/context_menu_data/edit_flags.h"
+@@ -138,6 +139,28 @@ - (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
  
- // A hidden button used only for creating context menus. The only way to
- // programmatically trigger a context menu on iOS is to trigger the primary
-@@ -136,8 +138,132 @@ - (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
- 
- @end
- 
-+// [ios-blink-sideload] The system edit menu (Cut, Copy, Paste, Select All) for
-+// a context menu request without a link or an image, which Blink sends when
-+// text or a text field is long-pressed: Chrome only builds context menus for
-+// links and images. The menu's actions go through the responder chain to the
-+// RenderWidgetUIView, which runs them as Blink edit commands.
-+@interface ContentEditMenu : NSObject <UIEditMenuInteractionDelegate>
-+
-+// Shows the menu in `view`, at the location in `params`.
-++ (void)showForParams:(const content::ContextMenuParams&)params
-+          webContents:(content::WebContents*)webContents
-+               inView:(UIView*)view;
-+
-+@end
-+
-+namespace {
-+
-+// Key of the ContentEditMenu associated with a view.
-+const char kContentEditMenuKey = 0;
-+
-+}  // namespace
-+
-+@implementation ContentEditMenu {
-+  UIEditMenuInteraction* _interaction;
-+  int _editFlags;
-+  // The selection, for the menu to avoid, or CGRectNull.
-+  CGRect _selectionRect;
-+  base::WeakPtr<content::WebContents> _webContents;
-+}
-+
-++ (void)showForParams:(const content::ContextMenuParams&)params
-+          webContents:(content::WebContents*)webContents
-+               inView:(UIView*)view {
-+  // A view keeps one menu, and the menu its interaction.
-+  ContentEditMenu* menu = objc_getAssociatedObject(view, &kContentEditMenuKey);
-+  if (!menu) {
-+    menu = [[ContentEditMenu alloc] init];
-+    menu->_interaction = [[UIEditMenuInteraction alloc] initWithDelegate:menu];
-+    [view addInteraction:menu->_interaction];
-+    objc_setAssociatedObject(view, &kContentEditMenuKey, menu,
-+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-+  }
-+  menu->_editFlags = params.edit_flags;
-+  // A subframe's selection rect is in that frame's coordinates.
-+  menu->_selectionRect = params.is_subframe || params.selection_rect.IsEmpty()
-+                             ? CGRectNull
-+                             : params.selection_rect.ToCGRect();
-+  menu->_webContents = webContents->GetWeakPtr();
-+  UIEditMenuConfiguration* configuration = [UIEditMenuConfiguration
-+      configurationWithIdentifier:nil
-+                      sourcePoint:CGPointMake(params.x, params.y)];
-+  // Above the selection where there is room, like UIKit's text views.
-+  configuration.preferredArrowDirection = UIEditMenuArrowDirectionDown;
-+  [menu->_interaction presentEditMenuWithConfiguration:configuration];
-+}
-+
-+// Whether the menu offers the standard edit `action`.
-+- (BOOL)allowsAction:(SEL)action {
-+  if (action == @selector(cut:)) {
-+    return (_editFlags & blink::kCanCut) != 0;
-+  }
-+  if (action == @selector(copy:)) {
-+    return (_editFlags & blink::kCanCopy) != 0;
-+  }
-+  if (action == @selector(paste:)) {
-+    return (_editFlags & blink::kCanPaste) != 0 &&
-+           UIPasteboard.generalPasteboard.hasStrings;
-+  }
-+  if (action == @selector(selectAll:)) {
-+    return (_editFlags & blink::kCanSelectAll) != 0;
-+  }
-+  return NO;
-+}
-+
-+// Returns the commands of `elements` that the menu offers, in their submenus.
-+- (NSArray<UIMenuElement*>*)allowedElements:
-+    (NSArray<UIMenuElement*>*)elements {
-+  NSMutableArray<UIMenuElement*>* allowed = [NSMutableArray array];
-+  for (UIMenuElement* element in elements) {
-+    if (UIMenu* menu = base::apple::ObjCCast<UIMenu>(element)) {
-+      NSArray<UIMenuElement*>* children = [self allowedElements:menu.children];
-+      if (children.count) {
-+        [allowed addObject:[menu menuByReplacingChildren:children]];
-+      }
-+    } else if (UICommand* command = base::apple::ObjCCast<UICommand>(element)) {
-+      if ([self allowsAction:command.action]) {
-+        [allowed addObject:command];
-+      }
-+    }
-+  }
-+  return allowed;
-+}
-+
-+#pragma mark - UIEditMenuInteractionDelegate
-+
-+- (UIMenu*)editMenuInteraction:(UIEditMenuInteraction*)interaction
-+          menuForConfiguration:(UIEditMenuConfiguration*)configuration
-+              suggestedActions:(NSArray<UIMenuElement*>*)suggestedActions {
-+  NSArray<UIMenuElement*>* children = [self allowedElements:suggestedActions];
-+  return children.count ? [UIMenu menuWithChildren:children] : nil;
-+}
-+
-+- (CGRect)editMenuInteraction:(UIEditMenuInteraction*)interaction
-+    targetRectForConfiguration:(UIEditMenuConfiguration*)configuration {
-+  return _selectionRect;
-+}
-+
-+- (void)editMenuInteraction:(UIEditMenuInteraction*)interaction
-+    willDismissMenuForConfiguration:(UIEditMenuConfiguration*)configuration
-+                           animator:
-+                               (id<UIEditMenuInteractionAnimating>)animator {
-+  if (_webContents) {
-+    _webContents->NotifyContextMenuClosed(GURL());
-+  }
-+}
-+
-+@end
-+
  namespace {
  
 +// [ios-blink-sideload] Whether `params` asks for a menu for text, rather than
@@ -200,15 +56,32 @@ index 3cfe9e543aa48a1d4bbe9a5e5a0687601008bb59..ad433dfc3777621f7951b19cbff68114
 +         (params.is_editable || !params.selection_text.empty());
 +}
 +
++// [ios-blink-sideload] Shows the system edit menu, the one Safari shows, for
++// the selection in the web view `view`: Blink asks for a context menu when text
++// or a text field is long-pressed, but Chrome only builds context menus for
++// links and images. The view's text interaction asks the view which actions
++// to offer, and sends them to it.
++void PresentEditMenu(UIView* view) {
++  for (id<UIInteraction> interaction in view.interactions) {
++    if (BETextInteraction* text_interaction =
++            base::apple::ObjCCast<BETextInteraction>(interaction)) {
++      [text_interaction presentEditMenuForSelection];
++      return;
++    }
++  }
++}
++
  gfx::NativeView GetContentNativeView(content::WebContents* web_contents) {
    content::RenderWidgetHostView* rwhv = web_contents->GetRenderWidgetHostView();
    if (!rwhv) {
-@@ -167,6 +293,10 @@ - (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
+@@ -167,6 +190,12 @@ - (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
  
    UIView* view = base::apple::ObjCCastStrict<UIView>(
        GetContentNativeView(web_contents).Get());
 +  if (view && IsEditMenuRequest(params)) {
-+    [ContentEditMenu showForParams:params webContents:web_contents inView:view];
++    PresentEditMenu(view);
++    // The edit menu is not a Blink context menu, so this one is done.
++    web_contents->NotifyContextMenuClosed(GURL());
 +    return;
 +  }
    CGRect frame = CGRectMake(params.x, params.y, 0, 0);

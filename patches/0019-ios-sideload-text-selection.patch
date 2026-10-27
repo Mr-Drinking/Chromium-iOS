@@ -1,0 +1,791 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 21:43:08 +0800
+Subject: [PATCH] iOS sideload: select text like Safari
+
+RenderWidgetUIView already uses BrowserEngineKit's text interaction,
+which draws the system selection handles and presents the system edit
+menu, but neither worked: a long press selected a word with no handles
+to adjust it, and patch 0015's menu offered only Copy and Select All.
+
+The system text interaction keeps its own copy of the selection, built
+from the UITextInput methods, and these lost it:
+- BETextRange returned the selection's end as its start, and
+  -comparePosition:toPosition: and -offsetFromPosition:toPosition: said
+  that all positions are the same, so every selection was a caret.
+- -beginningOfDocument returned nil. UIKit turns the selection into
+  offsets from the start of the document and back, and lost it there.
+- The copy is refreshed with -refreshKeyboardUI, which only ran when
+  the selected text changed. Blink reports that before the selection's
+  new bounds, so the copy kept the old bounds or none. Refresh it when
+  the bounds change too; refreshing dismisses the edit menu, so show it
+  again if it was showing.
+- -selectionClipRect returned CGRectNull outside text fields, which
+  clipped the selection UI away. Clip to the view.
+The handles now show, and the edit menu sits next to the selection.
+
+Dragging a handle moved the wrong end of the selection: `baseIsStart`
+(the start stays put while the end handle moves) was read the other way
+round, and the end that stays put was taken again from the changing
+selection at every move, so it wandered once the handles crossed. Take
+it once, when the drag starts, from the middle of its bound.
+
+Make the edit menu Safari's: let the system present it
+(automaticallyPresentEditMenu), show it again when a handle is let go
+and when a scroll ends, and hide it while the page scrolls.
+-canPerformAction:withSender: now answers for the current selection, and
+only for actions this class implements (UIKit's categories make every
+responder respond to some private ones). The menu also gets commands
+that other responders in the chain can perform, so keep only these:
+Copy, Look Up, Translate and Share, plus Cut, Paste, Select, Select All
+and Learn in text fields. Look Up and Translate come with UIKit's
+private actions; send them to the BETextInput ones (-lookup:,
+-translate:), which present the system dictionary and Apple Translate,
+and add -share: and -addShortcut:. Look Up also needs the selected text
+from -requestDocumentContext:completionHandler:, which now returns the
+selection and the text Blink reported around it.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator. A long
+press on a word selects it with handles at both ends and shows Copy,
+Look Up and Translate, with Share on the menu's second page; dragging
+either handle, also across lines, changes that end of the selection and
+the menu comes back over the new selection when the handle is let go;
+the menu hides while the page scrolls and comes back, with the handles
+following the text; Copy puts the selection on the pasteboard, Look Up
+shows the system dictionary sheet and Translate Apple Translate's. In a
+textarea the menu has Cut, Copy, Paste and Select All. A long press on
+a link still shows Chrome's link menu.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index d7bda6332c2c17960af0f0a4d4a1b6eba13bbaca..dbbdeddc0a0da5d076913aff5a9313fb6485df4f 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -888,6 +888,7 @@ bool IsTesting() {
+   } else {
+     [[ui_view_->view_ textInteraction] textSelectionDisplayInteraction]
+         .activated = NO;
++    [ui_view_->view_ selectionDidClear];
+   }
+ #endif
+ }
+@@ -898,6 +899,7 @@ bool IsTesting() {
+ #if !BUILDFLAG(IS_IOS_TVOS)
+   [[ui_view_->view_ textInteraction]
+           .textSelectionDisplayInteraction setNeedsSelectionUpdate];
++  [ui_view_->view_ selectionBoundsDidChange];
+ #endif
+ }
+ 
+@@ -921,6 +923,9 @@ bool IsTesting() {
+         host()->delegate()->SetTopControlsGestureScrollInProgress(true);
+       }
+       [[scrollView delegate] scrollViewWillBeginDragging:scrollView];
++#if !BUILDFLAG(IS_IOS_TVOS)
++      [ui_view_->view_ gestureScrollDidBegin];
++#endif
+       break;
+     case blink::WebInputEvent::Type::kGestureScrollUpdate:
+       // TODO(crbug.com/40274032): Since ScrollResultData has been removed from
+@@ -945,6 +950,9 @@ bool IsTesting() {
+       [[scrollView delegate] scrollViewDidEndDragging:scrollView
+                                        willDecelerate:NO];
+       host()->SynchronizeVisualProperties();
++#if !BUILDFLAG(IS_IOS_TVOS)
++      [ui_view_->view_ gestureScrollDidEnd];
++#endif
+       break;
+     }
+     default:
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+index c83a24a578981656eb97419f4a11de152f689537..a78ccdbce7ef8b753188879a91ffd7ee8350c8e7 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+@@ -15,6 +15,7 @@
+ #include "content/browser/renderer_host/render_widget_host_view_ios.h"
+ #include "third_party/blink/public/mojom/input/input_handler.mojom-forward.h"
+ #include "ui/accelerated_widget_mac/ca_layer_frame_sink_provider.h"
++#include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/vector2d_f.h"
+ 
+ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+@@ -36,6 +37,17 @@ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+   std::optional<input::NativeWebKeyboardEvent> _currentKeyDownEvent;
+   std::optional<gfx::Vector2dF> _viewOffsetDuringTouchSequence;
+   CGFloat _keyboardHeight;
++  // [ios-blink-sideload] Whether the system edit menu is showing, whether a
++  // scroll hid it, and whether to show it when the selection's bounds next
++  // change.
++  BOOL _editMenuVisible;
++  BOOL _editMenuHiddenForScroll;
++  BOOL _presentEditMenuOnSelectionUpdate;
++  // [ios-blink-sideload] While a selection handle is dragged: the point of the
++  // selection that stays put, and the top and bottom of its line.
++  gfx::Point _selectionDragBase;
++  CGFloat _selectionDragBaseTop;
++  CGFloat _selectionDragBaseBottom;
+ }
+ 
+ - (instancetype)initWithWidget:
+@@ -49,6 +61,13 @@ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+ - (CGFloat)keyboardOverlap;
+ 
+ - (BETextInteraction*)textInteraction;
++// [ios-blink-sideload] Called when a gesture scroll of the page begins and
++// ends, and when the selection becomes empty.
++- (void)gestureScrollDidBegin;
++- (void)gestureScrollDidEnd;
++- (void)selectionDidClear;
++// [ios-blink-sideload] Called when the selection's bounds change.
++- (void)selectionBoundsDidChange;
+ - (void)updateView:(UIScrollView*)view;
+ - (void)removeView;
+ @end
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index ebde9180c5f45d4d8bc0d968cca9de50913e51f9..c80c22520b496841cf343a8f713dfd39389d6ba4 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -28,56 +28,77 @@
+ #pragma mark - BETextPosition
+ @interface BETextPosition : UITextPosition {
+   CGRect rect_;
++  // [ios-blink-sideload] The offset from the start of the selection, so that
++  // UIKit can order positions and tell a range from a caret.
++  NSInteger offset_;
+ }
+-- (instancetype)initWithRect:(CGRect)rect;
++- (instancetype)initWithRect:(CGRect)rect offset:(NSInteger)offset;
+ 
+ @end
+ 
+ @implementation BETextPosition
+-- (instancetype)initWithRect:(CGRect)rect {
++- (instancetype)initWithRect:(CGRect)rect offset:(NSInteger)offset {
+   rect_ = rect;
++  offset_ = offset;
+   return [self init];
+ }
+ - (CGRect)rect {
+   return rect_;
+ }
++- (NSInteger)offset {
++  return offset_;
++}
+ @end
+ 
+ #pragma mark - BETextRange
+ @interface BETextRange : UITextRange {
+-  CGRect start_;
+-  CGRect end_;
++  BETextPosition* start_;
++  BETextPosition* end_;
+ }
+-- (instancetype)initWithRegion:
+-    (const content::TextInputManager::SelectionRegion*)region;
++- (instancetype)initWithStart:(BETextPosition*)start end:(BETextPosition*)end;
+ @end
+ 
+ @implementation BETextRange
+ 
+-- (instancetype)initWithRegion:
+-    (const content::TextInputManager::SelectionRegion*)region {
+-  start_ = CGRectMake(region->anchor.edge_start_rounded().x(),
+-                      region->anchor.edge_start_rounded().y(), 1,
+-                      region->anchor.GetHeight());
+-
+-  end_ = CGRectMake(region->focus.edge_start_rounded().x(),
+-                    region->focus.edge_start_rounded().y(), 1,
+-                    region->focus.GetHeight());
++- (instancetype)initWithStart:(BETextPosition*)start end:(BETextPosition*)end {
++  start_ = start;
++  end_ = end;
+   return [self init];
+ }
+ 
++// [ios-blink-sideload] A range and its positions now come from the selection's
++// start and end. Both positions used to be the end, so UIKit took every
++// selection for a caret and never showed the selection handles.
+ - (BOOL)isEmpty {
+-  return CGRectEqualToRect(start_, end_);
++  return [start_ offset] >= [end_ offset];
+ }
+ 
+ - (UITextPosition*)start {
+-  return [[BETextPosition alloc] initWithRect:end_];
++  return start_;
+ }
+ - (UITextPosition*)end {
+-  return [[BETextPosition alloc] initWithRect:end_];
++  return end_;
+ }
+ @end
+ 
++namespace {
++
++// [ios-blink-sideload] The rect of the caret at a selection bound.
++CGRect RectForBound(const gfx::SelectionBound& bound) {
++  return CGRectMake(bound.edge_start_rounded().x(),
++                    bound.edge_start_rounded().y(), 1, bound.GetHeight());
++}
++
++// [ios-blink-sideload] The middle of a selection bound's edge. Unlike the top
++// of the edge, it is safely within the bound's line of text.
++gfx::Point MiddleOfBound(const gfx::SelectionBound& bound) {
++  return gfx::ToRoundedPoint(
++      gfx::PointF((bound.edge_start().x() + bound.edge_end().x()) / 2,
++                  (bound.edge_start().y() + bound.edge_end().y()) / 2));
++}
++
++}  // namespace
++
+ #pragma mark - BETextSelectionHandles
+ @interface BETextSelectionHandles : UITextSelectionRect
+ - (instancetype)initWithCGRect:(CGRect)rect atStart:(BOOL)start;
+@@ -461,8 +482,9 @@ - (void)updateInputAssistantItem {
+ }
+ 
+ - (BOOL)automaticallyPresentEditMenu {
+-  // Needs an edit menu implementation.
+-  return NO;
++  // [ios-blink-sideload] Let the system present its edit menu, the one Safari
++  // shows, for the selection. -canPerformAction:withSender: picks its actions.
++  return YES;
+ }
+ 
+ - (BOOL)isReplaceAllowed {
+@@ -560,7 +582,10 @@ - (void)unmarkText {
+ - (CGRect)selectionClipRect {
+   auto rect = [self textControlBounds];
+   if (!rect) {
+-    return CGRectNull;
++    // [ios-blink-sideload] Outside text fields, clip to the view only. UIKit
++    // clipped the selection UI to CGRectNull: it never showed the selection
++    // handles, and put the edit menu at the top of the view.
++    return self.bounds;
+   }
+   // Need to get a more realistic rect here. If this clip is too small,
+   // selection handles won't draw correctly.
+@@ -720,8 +745,155 @@ - (BOOL)canPerformAction:(SEL)action withSender:(nullable id)sender {
+   // once its RenderWidgetHostViewIOS is gone (the edit commands CHECK it).
+   // Claiming every action made UIKit send this view actions it lacks, such as
+   // the embedder's keyboard shortcuts, which crashed with "unrecognized
+-  // selector".
+-  return _view && [self respondsToSelector:action];
++  // selector". Implemented means by this class, not UIView: UIKit's categories
++  // make every view respond to some private actions, such as the edit menu's
++  // _translate:, which do nothing here.
++  if (!_view || [self methodForSelector:action] ==
++                    [UIView instanceMethodForSelector:action]) {
++    return NO;
++  }
++  // [ios-blink-sideload] The system edit menu offers the actions this returns
++  // YES for, so only claim those that apply to the current selection.
++  BOOL hasSelection = [self selectedText].length > 0;
++  if (action == @selector(copy:) || action == @selector(lookup:) ||
++      action == @selector(translate:) || action == @selector(share:)) {
++    return hasSelection;
++  }
++  if (action == @selector(cut:)) {
++    return hasSelection && _isEditable;
++  }
++  if (action == @selector(paste:)) {
++    return _isEditable && UIPasteboard.generalPasteboard.hasStrings;
++  }
++  if (action == @selector(select:)) {
++    return _isEditable && !hasSelection && [self hasText];
++  }
++  if (action == @selector(addShortcut:)) {
++    // Learn…, which adds a text replacement for the keyboard, as in text
++    // fields elsewhere.
++    return hasSelection && _isEditable;
++  }
++  if (action == @selector(selectAll:)) {
++    // Safari offers Select All for text fields only, but Command-A selects the
++    // whole page.
++    return _isEditable || [sender isKindOfClass:[UIKeyCommand class]];
++  }
++  if (action == @selector(showWritingTools:)) {
++    // UIResponder's Writing Tools need text access this view lacks.
++    return NO;
++  }
++  return YES;
++}
++
++// [ios-blink-sideload] Keeps the system edit menu to what Safari offers for the
++// selection: the menu also gets commands that other responders in the chain
++// can perform, such as Select All and AutoFill outside text fields.
++- (NSArray<UIMenuElement*>*)editMenuElementsFrom:
++    (NSArray<UIMenuElement*>*)elements {
++  NSMutableArray<UIMenuElement*>* kept = [NSMutableArray array];
++  for (UIMenuElement* element in elements) {
++    if (UIMenu* menu = base::apple::ObjCCast<UIMenu>(element)) {
++      if (!_isEditable && [menu.identifier isEqual:UIMenuAutoFill]) {
++        continue;
++      }
++      NSArray<UIMenuElement*>* children =
++          [self editMenuElementsFrom:menu.children];
++      if (children.count) {
++        [kept addObject:[menu menuByReplacingChildren:children]];
++      }
++    } else if (UICommand* command =
++                   base::apple::ObjCCast<UICommand>(element)) {
++      // The menu's Look Up and Translate use UIKit's private actions; send
++      // them to this view's BETextInput ones instead, keeping their titles.
++      SEL action = command.action;
++      if (action == NSSelectorFromString(@"_define:")) {
++        action = @selector(lookup:);
++      } else if (action == NSSelectorFromString(@"_translate:")) {
++        action = @selector(translate:);
++      }
++      if (![self canPerformAction:action withSender:nil]) {
++        continue;
++      }
++      [kept addObject:action == command.action
++                          ? command
++                          : [UICommand commandWithTitle:command.title
++                                                  image:command.image
++                                                 action:action
++                                           propertyList:nil]];
++    } else {
++      [kept addObject:element];
++    }
++  }
++  return kept;
++}
++
++- (void)buildMenuWithBuilder:(id<UIMenuBuilder>)builder {
++  [super buildMenuWithBuilder:builder];
++  if (builder.system != UIMenuSystem.contextSystem) {
++    return;
++  }
++  [builder replaceChildrenOfMenuForIdentifier:UIMenuRoot
++                            fromChildrenBlock:^(
++                                NSArray<UIMenuElement*>* children) {
++                              return [self editMenuElementsFrom:children];
++                            }];
++}
++
++// [ios-blink-sideload] Where the selection is, for the sheets of the actions
++// below to point at.
++- (CGRect)selectionPresentationRect {
++  auto* region = [self selectionRegion];
++  if (!region) {
++    return CGRectNull;
++  }
++  return region->bounding_box.IsEmpty()
++             ? CGRectUnion(RectForBound(region->anchor),
++                           RectForBound(region->focus))
++             : region->bounding_box.ToCGRect();
++}
++
++// [ios-blink-sideload] The edit menu's Look Up, Translate and Share, as in
++// Safari.
++- (void)lookup:(nullable id)sender {
++  NSString* text = [self selectedText];
++  if (!text.length) {
++    return;
++  }
++  [text_interaction_
++      showDictionaryForTextInContext:text
++                 definingTextInRange:NSMakeRange(0, text.length)
++                            fromRect:[self selectionPresentationRect]];
++}
++
++- (void)translate:(nullable id)sender {
++  NSString* text = [self selectedText];
++  if (!text.length) {
++    return;
++  }
++  [text_interaction_ translateText:text
++                          fromRect:[self selectionPresentationRect]];
++}
++
++- (void)share:(nullable id)sender {
++  NSString* text = [self selectedText];
++  if (!text.length) {
++    return;
++  }
++  [text_interaction_ shareText:text fromRect:[self selectionPresentationRect]];
++}
++
++- (void)addShortcut:(nullable id)sender {
++  NSString* text = [self selectedText];
++  if (!text.length) {
++    return;
++  }
++  [text_interaction_ addShortcutForText:text
++                               fromRect:[self selectionPresentationRect]];
++}
++
++// [ios-blink-sideload] The edit menu's Select, for a caret in a text field.
++- (void)select:(nullable id)sender {
++  [self handleEditCommands:{"selectWord"}];
+ }
+ 
+ - (BOOL)shouldInsertCharacter:(const blink::WebKeyboardEvent&)webKeyboardEvent {
+@@ -922,11 +1094,55 @@ - (void)requestPreferredArrowDirectionForEditMenuWithCompletionHandler:
+ - (void)systemWillPresentEditMenuWithAnimator:
+     (id<UIEditMenuInteractionAnimating>)animator
+     API_UNAVAILABLE(watchos, tvos) {
++  _editMenuVisible = YES;
+ }
+ 
+ - (void)systemWillDismissEditMenuWithAnimator:
+     (id<UIEditMenuInteractionAnimating>)animator
+     API_UNAVAILABLE(watchos, tvos) {
++  _editMenuVisible = NO;
++}
++
++- (void)gestureScrollDidBegin {
++  // [ios-blink-sideload] Like Safari, hide the edit menu while the page
++  // scrolls, and show it again when the scroll ends.
++  _presentEditMenuOnSelectionUpdate = NO;
++  if (_editMenuVisible) {
++    _editMenuHiddenForScroll = YES;
++    [text_interaction_ dismissEditMenuForSelection];
++  }
++}
++
++- (void)gestureScrollDidEnd {
++  if (std::exchange(_editMenuHiddenForScroll, NO) &&
++      [self selectedTextRange]) {
++    [text_interaction_ presentEditMenuForSelection];
++  }
++}
++
++- (void)selectionDidClear {
++  // [ios-blink-sideload] The edit menu is for the selection that is gone.
++  _editMenuHiddenForScroll = NO;
++  _presentEditMenuOnSelectionUpdate = NO;
++  [text_interaction_ dismissEditMenuForSelection];
++}
++
++- (void)selectionBoundsDidChange {
++  // [ios-blink-sideload] The system text interaction keeps its own copy of the
++  // selection, which -refreshKeyboardUI updates. That only happened when the
++  // selected text changed, which Blink reports before the selection's new
++  // bounds, so the copy kept the old bounds or none: the selection handles
++  // never showed, and the edit menu went to the top of the view. Refreshing
++  // dismisses the edit menu, so show it again.
++  if (![self selectedText].length) {
++    return;
++  }
++  BOOL presentEditMenu = _editMenuVisible ||
++                         std::exchange(_presentEditMenuOnSelectionUpdate, NO);
++  [text_interaction_ refreshKeyboardUI];
++  if (presentEditMenu) {
++    [text_interaction_ presentEditMenuForSelection];
++  }
+ }
+ 
+ - (nullable NSDictionary<NSAttributedStringKey, id>*)
+@@ -958,54 +1174,60 @@ - (void)setSelectionFromPoint:(CGPoint)from
+ 
+ - (void)adjustSelectionBoundaryToPoint:(CGPoint)point
+                             touchPhase:(BESelectionTouchPhase)touch
+-                           baseIsStart:(BOOL)boundaryIsStart
++                           baseIsStart:(BOOL)baseIsStart
+                                  flags:(BESelectionFlags)flags {
+-  auto* region = [self selectionRegion];
+-  if (!region || !region->focus.HasHandle()) {
+-    return;
+-  }
+-
+-  // A simple naive implementation that updates the selection range based on
+-  // a combination of boundaryIsStart (to know which handle was grabbed) and
+-  // SelectionRegion data. In the future this could be simplified with more
+-  // data, such as document position of selection to know which should be
+-  // start and end.
+-  CGPoint start, end;
+-  if (region->focus.type() == gfx::SelectionBound::RIGHT) {
+-    start = CGPointMake(region->focus.edge_start_rounded().x(),
+-                        region->focus.edge_start_rounded().y());
+-    end = CGPointMake(region->anchor.edge_start_rounded().x(),
+-                      region->anchor.edge_start_rounded().y());
+-  } else {
+-    end = CGPointMake(region->focus.edge_start_rounded().x(),
+-                      region->focus.edge_start_rounded().y());
+-    start = CGPointMake(region->anchor.edge_start_rounded().x(),
+-                        region->anchor.edge_start_rounded().y());
+-  }
+-
+-  if (boundaryIsStart) {
+-    end = point;
++  // [ios-blink-sideload] Rewritten. `baseIsStart` means that the selection's
++  // start stays put while the end handle moves; it was read the other way
++  // round, so the end handle moved the start. The bound that stays put was
++  // also taken again from the changing selection at every move, so it
++  // wandered once the handles crossed. Now it is taken once, when the drag
++  // starts, as the middle of its bound (the top can round into the line
++  // above).
++  if (touch == BESelectionTouchPhaseStarted) {
++    auto* region = [self selectionRegion];
++    if (!region || !region->focus.HasHandle()) {
++      return;
++    }
++    const gfx::SelectionBound* start = &region->anchor;
++    const gfx::SelectionBound* end = &region->focus;
++    if (start->type() == gfx::SelectionBound::RIGHT ||
++        end->type() == gfx::SelectionBound::LEFT) {
++      std::swap(start, end);
++    }
++    const gfx::SelectionBound& base = baseIsStart ? *start : *end;
++    _selectionDragBase = MiddleOfBound(base);
++    _selectionDragBaseTop = base.edge_start().y();
++    _selectionDragBaseBottom = base.edge_end().y();
+   } else {
+-    start = point;
+-  }
+-
+-  // This should look at document position instead, but for a naive
+-  // implementation works well enough.
+-  if (end.x < start.x && end.y < start.y) {
+-    flags = BESelectionFlipped;
+-    CGPoint flip = start;
+-    start = end;
+-    end = flip;
++    _view->host()->delegate()->SelectRange(
++        _selectionDragBase, gfx::ToRoundedPoint(gfx::PointF(point.x, point.y)));
++    // Whether the moving handle has crossed the one that stays put, assuming
++    // left-to-right lines.
++    BOOL before = point.y < _selectionDragBaseTop ||
++                  (point.y < _selectionDragBaseBottom &&
++                   point.x < _selectionDragBase.x());
++    BOOL after = point.y > _selectionDragBaseBottom ||
++                 (point.y > _selectionDragBaseTop &&
++                  point.x > _selectionDragBase.x());
++    if (baseIsStart ? before : after) {
++      flags |= BESelectionFlipped;
++    }
+   }
+ 
+-  _view->host()->delegate()->SelectRange(gfx::Point(start.x, start.y),
+-                                         gfx::Point(end.x, end.y));
+-
+   // Tells the system the selection adjustment has been handled for the given
+   // `point` and touch.
+   [text_interaction_ selectionBoundaryAdjustedToPoint:point
+                                            touchPhase:touch
+                                                 flags:flags];
++
++  // [ios-blink-sideload] Like Safari, show the edit menu again once the handle
++  // is let go, and again once Blink reports the final selection (see
++  // -selectionBoundsDidChange).
++  if (touch != BESelectionTouchPhaseStarted &&
++      touch != BESelectionTouchPhaseMoved) {
++    _presentEditMenuOnSelectionUpdate = YES;
++    [text_interaction_ presentEditMenuForSelection];
++  }
+ }
+ 
+ - (BOOL)textInteractionGesture:(BEGestureType)gestureType
+@@ -1096,6 +1318,11 @@ - (void)moveSelectionAtBoundary:(UITextGranularity)granularity
+                                         NSString* _Nullable contextString,
+                                         NSRange selectedRangeInContextString))
+                                   completionHandler {
++  // [ios-blink-sideload] Blink selects the text before the menu is asked for;
++  // offer the menu for the current selection.
++  NSString* text = [self selectedText];
++  completionHandler(text.length > 0 || _isEditable, text,
++                    NSMakeRange(0, text.length));
+ }
+ 
+ - (void)setAttributedMarkedText:(nullable NSAttributedString*)markedText
+@@ -1111,7 +1338,25 @@ - (BOOL)isPointNearMarkedText:(CGPoint)point {
+ - (void)requestDocumentContext:(BETextDocumentRequest*)request
+              completionHandler:
+                  (void (^)(BETextDocumentContext*))completionHandler {
+-  completionHandler(nil);
++  // [ios-blink-sideload] The selection and the text Blink reported around it.
++  // The edit menu offers Look Up only for text it gets here.
++  auto* selection = [self textSelection];
++  if (!selection || !selection->selected_text().length()) {
++    completionHandler(nil);
++    return;
++  }
++  const std::u16string& text = selection->text();
++  size_t start = std::min(selection->range().GetMin() - selection->offset(),
++                          text.length());
++  size_t end = std::min(selection->range().GetMax() - selection->offset(),
++                        text.length());
++  completionHandler([[BETextDocumentContext alloc]
++           initWithSelectedText:base::SysUTF16ToNSString(
++                                    selection->selected_text())
++                  contextBefore:base::SysUTF16ToNSString(text.substr(0, start))
++                   contextAfter:base::SysUTF16ToNSString(text.substr(end))
++                     markedText:nil
++      selectedRangeInMarkedText:NSMakeRange(NSNotFound, 0)]);
+ }
+ 
+ - (void)willInsertFinalDictationResult {
+@@ -1169,11 +1414,15 @@ - (void)setMarkedTextStyle:(NSDictionary*)styleDictionary {
+ }
+ 
+ - (UITextPosition*)beginningOfDocument {
+-  return nil;
++  // [ios-blink-sideload] Only the selection is known, so it stands for the
++  // document. UIKit turns the selection into offsets from the start of the
++  // document and back; with no start, it lost the selection and never showed
++  // the selection handles, and put the edit menu at the top of the view.
++  return [self selectedTextRange].start;
+ }
+ 
+ - (UITextPosition*)endOfDocument {
+-  return nil;
++  return [self selectedTextRange].end;
+ }
+ 
+ - (BOOL)hasText {
+@@ -1231,14 +1480,41 @@ - (void)setSelectedTextRange:(UITextRange*)range {
+ 
+ - (UITextRange*)selectedTextRange {
+   auto* region = [self selectionRegion];
+-  if (region) {
+-    return [[BETextRange alloc] initWithRegion:region];
++  if (!region || region->anchor.type() == gfx::SelectionBound::EMPTY) {
++    return nil;
+   }
+ 
+-  return nil;
++  // [ios-blink-sideload] The selection's start is its left bound (the bounds
++  // are LEFT and RIGHT for left-to-right text); a caret's bounds are CENTER.
++  const gfx::SelectionBound* start = &region->anchor;
++  const gfx::SelectionBound* end = &region->focus;
++  if (start->type() == gfx::SelectionBound::RIGHT ||
++      end->type() == gfx::SelectionBound::LEFT) {
++    std::swap(start, end);
++  }
++  NSInteger length = 0;
++  if (start->type() != gfx::SelectionBound::CENTER) {
++    length = std::max<NSInteger>([self selectedText].length, 1);
++  }
++  return [[BETextRange alloc]
++      initWithStart:[[BETextPosition alloc] initWithRect:RectForBound(*start)
++                                                   offset:0]
++                end:[[BETextPosition alloc] initWithRect:RectForBound(*end)
++                                                  offset:length]];
+ }
+ - (nullable NSString*)textInRange:(UITextRange*)range {
+-  return nil;
++  // [ios-blink-sideload] Only the selection's text is known.
++  BETextRange* be_range = base::apple::ObjCCast<BETextRange>(range);
++  NSString* text = [self selectedText];
++  if (!be_range || !text) {
++    return nil;
++  }
++  NSInteger length = static_cast<NSInteger>(text.length);
++  NSInteger start = std::clamp<NSInteger>(
++      [(BETextPosition*)be_range.start offset], 0, length);
++  NSInteger end = std::clamp<NSInteger>([(BETextPosition*)be_range.end offset],
++                                        start, length);
++  return [text substringWithRange:NSMakeRange(start, end - start)];
+ }
+ 
+ - (void)replaceRange:(UITextRange*)range withText:(NSString*)text {
+@@ -1271,12 +1547,36 @@ - (void)setMarkedText:(nullable NSString*)markedText
+ 
+ - (nullable UITextRange*)textRangeFromPosition:(UITextPosition*)fromPosition
+                                     toPosition:(UITextPosition*)toPosition {
+-  return nil;
++  // [ios-blink-sideload] Ranges within the selection, for UIKit's selection UI.
++  BETextPosition* from = base::apple::ObjCCast<BETextPosition>(fromPosition);
++  BETextPosition* to = base::apple::ObjCCast<BETextPosition>(toPosition);
++  if (!from || !to) {
++    return nil;
++  }
++  return [from offset] <= [to offset]
++             ? [[BETextRange alloc] initWithStart:from end:to]
++             : [[BETextRange alloc] initWithStart:to end:from];
+ }
+ 
+ - (nullable UITextPosition*)positionFromPosition:(UITextPosition*)position
+                                           offset:(NSInteger)offset {
+-  return nil;
++  // [ios-blink-sideload] Positions within the selection, which only has rects
++  // for its start and end.
++  BETextPosition* be_position = base::apple::ObjCCast<BETextPosition>(position);
++  BETextRange* selection =
++      base::apple::ObjCCast<BETextRange>([self selectedTextRange]);
++  if (!be_position || !selection) {
++    return nil;
++  }
++  BETextPosition* start = (BETextPosition*)selection.start;
++  BETextPosition* end = (BETextPosition*)selection.end;
++  NSInteger newOffset = [be_position offset] + offset;
++  if (newOffset < [start offset] || newOffset > [end offset]) {
++    return nil;
++  }
++  return [[BETextPosition alloc]
++      initWithRect:(newOffset == [end offset] ? [end rect] : [start rect])
++            offset:newOffset];
+ }
+ 
+ - (nullable UITextPosition*)positionFromPosition:(UITextPosition*)position
+@@ -1288,12 +1588,25 @@ - (nullable UITextPosition*)positionFromPosition:(UITextPosition*)position
+ 
+ - (NSComparisonResult)comparePosition:(UITextPosition*)position
+                            toPosition:(UITextPosition*)other {
+-  return NSOrderedSame;
++  // [ios-blink-sideload] Every pair of positions compared equal, so UIKit took
++  // every selection for a caret.
++  BETextPosition* first = base::apple::ObjCCast<BETextPosition>(position);
++  BETextPosition* second = base::apple::ObjCCast<BETextPosition>(other);
++  if (!first || !second || [first offset] == [second offset]) {
++    return NSOrderedSame;
++  }
++  return [first offset] < [second offset] ? NSOrderedAscending
++                                          : NSOrderedDescending;
+ }
+ 
+ - (NSInteger)offsetFromPosition:(UITextPosition*)from
+                      toPosition:(UITextPosition*)toPosition {
+-  return 0;
++  BETextPosition* first = base::apple::ObjCCast<BETextPosition>(from);
++  BETextPosition* second = base::apple::ObjCCast<BETextPosition>(toPosition);
++  if (!first || !second) {
++    return 0;
++  }
++  return [second offset] - [first offset];
+ }
+ 
+ - (nullable UITextPosition*)positionWithinRange:(UITextRange*)range
+@@ -1335,17 +1648,15 @@ - (CGRect)caretRectForPosition:(UITextPosition*)position {
+     return @[];
+   }
+ 
+-  UITextSelectionRect* start = [[BETextSelectionHandles alloc]
+-      initWithCGRect:CGRectMake(region->focus.edge_start_rounded().x(),
+-                                region->focus.edge_start_rounded().y(), 1,
+-                                region->focus.GetHeight())
+-             atStart:region->focus.type() == gfx::SelectionBound::RIGHT];
+-  UITextSelectionRect* end = [[BETextSelectionHandles alloc]
+-      initWithCGRect:CGRectMake(region->anchor.edge_start_rounded().x(),
+-                                region->anchor.edge_start_rounded().y(), 1,
+-                                region->anchor.GetHeight())
+-             atStart:region->anchor.type() == gfx::SelectionBound::RIGHT];
+-  return @[ start, end ];
++  // [ios-blink-sideload] The LEFT bound is the start of the selection (see
++  // -selectedTextRange); this had them the other way round.
++  UITextSelectionRect* focus = [[BETextSelectionHandles alloc]
++      initWithCGRect:RectForBound(region->focus)
++             atStart:region->focus.type() == gfx::SelectionBound::LEFT];
++  UITextSelectionRect* anchor = [[BETextSelectionHandles alloc]
++      initWithCGRect:RectForBound(region->anchor)
++             atStart:region->anchor.type() == gfx::SelectionBound::LEFT];
++  return @[ focus, anchor ];
+ }
+ 
+ #pragma mark - Hit testing
+@@ -1427,7 +1738,9 @@ - (BOOL)isAccessibilityElement {
+ }
+ 
+ - (CGRect)firstRectForRange:(UITextRange*)range {
+-  return CGRectZero;
++  // [ios-blink-sideload] The selection's box, for the edit menu to avoid.
++  CGRect rect = [self selectionPresentationRect];
++  return CGRectIsNull(rect) ? CGRectZero : rect;
+ }
+ 
+ - (void)onUpdateTextInputState:(const ui::mojom::TextInputState&)state
+-- 
+2.54.0 (Apple Git-157)
+
