@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 28 Oct 2026 00:23:08 +0800
+Subject: [PATCH] iOS sideload: system colors for the caret and text selection
+
+The selection handles were pure blue (content set [UIColor blueColor]),
+the selection was Android's (LayoutThemeMobile's 40% cyan, with the
+selected text turned black, and dark gray on light blue in dark mode),
+and the caret was a 1-point bar in the text color. In Safari all three
+are systemBlue:
+
+- the handles are UIColor.systemBlueColor;
+- Blink paints the selection in systemBlue at 20% opacity, the alpha
+  WebKit gives the selection highlight, and selected text keeps its
+  color (SupportsSelectionForegroundColors() is false, as on the Mac);
+- a caret without caret-color is systemBlue and 2 points wide.
+
+LayoutThemeIOS::SystemBlueColor() has the iOS 26 values (#0088FF,
+#0091FF in dark mode), as UIKit resolves systemBlue in the iOS 27
+simulator.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator, against
+Safari on the same simulator and test page: a long-pressed word's
+selection is (197, 232, 255) over white and its handles (0, 139, 255),
+the same pixels as Safari; selected red text stays red; in dark mode
+the selection is systemBlue at 20% over the dark page and white text
+stays white; the caret in a textarea is systemBlue and 6 pixels (2
+points) wide, as in Safari, and an input with caret-color: red keeps a
+red caret.
+
+diff --git a/content/browser/renderer_host/ios_extended_text_input_traits.mm b/content/browser/renderer_host/ios_extended_text_input_traits.mm
+index 8ec46f22d966be95ccf47498eb6f71a986ff9586..9ff724f97a31564acbba7ddb8b2f1d7409f7b2a2 100644
+--- a/content/browser/renderer_host/ios_extended_text_input_traits.mm
++++ b/content/browser/renderer_host/ios_extended_text_input_traits.mm
+@@ -180,7 +180,9 @@ - (instancetype)init {
+     return nil;
+   }
+   self.typingAdaptationEnabled = YES;
+-  self.selectionHandleColor = [UIColor blueColor];
++  // [ios-blink-sideload] systemBlue, as in Safari, to match the caret and the
++  // selection that Blink paints (LayoutThemeIOS).
++  self.selectionHandleColor = UIColor.systemBlueColor;
+   return self;
+ }
+ 
+diff --git a/third_party/blink/renderer/core/editing/caret_display_item_client.cc b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
+index 0b7e5bd524fc172c095905df565927e04437215c..363c9a1201038b616b36d53dab5a9f5b08524843 100644
+--- a/third_party/blink/renderer/core/editing/caret_display_item_client.cc
++++ b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
+@@ -25,6 +25,7 @@
+ 
+ #include "third_party/blink/renderer/core/editing/caret_display_item_client.h"
+ 
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
+ #include "third_party/blink/renderer/core/editing/editing_utilities.h"
+ #include "third_party/blink/renderer/core/editing/local_caret_rect.h"
+@@ -45,6 +46,10 @@
+ #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
+ 
++#if BUILDFLAG(IS_IOS)
++#include "third_party/blink/renderer/core/layout/layout_theme_ios.h"
++#endif
++
+ namespace blink {
+ 
+ CaretDisplayItemClient::CaretDisplayItemClient() = default;
+@@ -221,6 +226,13 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
+     new_color = caret_position.AnchorNode()->GetLayoutObject()->ResolveColor(
+         GetCSSPropertyCaretColor());
+   }
++#if BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] As in Safari, the caret is systemBlue unless the page
++  // sets caret-color.
++  if (style && style->IsCaretColorAuto()) {
++    new_color = LayoutThemeIOS::SystemBlueColor(style->UsedColorScheme());
++  }
++#endif
+   if (new_color != color_) {
+     needs_paint_invalidation_ = true;
+     color_ = new_color;
+diff --git a/third_party/blink/renderer/core/frame/local_frame_view.cc b/third_party/blink/renderer/core/frame/local_frame_view.cc
+index d3c3a5805e518116dc7c8dcfb8d0b0df68c9cd17..de9871ab0028810fe3fef35445d446f3ba02a237 100644
+--- a/third_party/blink/renderer/core/frame/local_frame_view.cc
++++ b/third_party/blink/renderer/core/frame/local_frame_view.cc
+@@ -5351,8 +5351,15 @@ void LocalFrameView::MapLocalToRemoteMainFrame(
+ }
+ 
+ LayoutUnit LocalFrameView::BarCaretWidth() const {
++#if BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] The system's caret is 2 points wide, as in Safari.
++  constexpr float kBarCaretWidth = 2.0f;
++#else
++  constexpr float kBarCaretWidth = 1.0f;
++#endif
+   return LayoutUnit(std::max<float>(
+-      1.0f, GetChromeClient()->WindowToViewportScalar(&GetFrame(), 1.0f)));
++      1.0f,
++      GetChromeClient()->WindowToViewportScalar(&GetFrame(), kBarCaretWidth)));
+ }
+ 
+ void LocalFrameView::RegisterTapEvent(Element* target) {
+diff --git a/third_party/blink/renderer/core/layout/layout_theme_ios.h b/third_party/blink/renderer/core/layout/layout_theme_ios.h
+index 61f5f9579cc0644ec6ee68777e1bbd09c1168d89..7d6db0b539a9f2058cfc7ad59c6fd6aa88a66c28 100644
+--- a/third_party/blink/renderer/core/layout/layout_theme_ios.h
++++ b/third_party/blink/renderer/core/layout/layout_theme_ios.h
+@@ -12,12 +12,17 @@ namespace blink {
+ class LayoutThemeIOS final : public LayoutThemeMobile {
+  public:
+   static scoped_refptr<LayoutTheme> Create();
++  // [ios-blink-sideload] UIColor.systemBlueColor, which iOS uses for the caret
++  // and the text selection.
++  static Color SystemBlueColor(mojom::blink::ColorScheme color_scheme);
+   Color PlatformActiveSelectionBackgroundColor(
+       mojom::blink::ColorScheme color_scheme) const override;
+   Color PlatformActiveSelectionForegroundColor(
+       mojom::blink::ColorScheme color_scheme) const override;
+   Color PlatformSpellingMarkerUnderlineColor() const override;
+   Color PlatformGrammarMarkerUnderlineColor() const override;
++  // [ios-blink-sideload] Selected text keeps its color, as in Safari.
++  bool SupportsSelectionForegroundColors() const override { return false; }
+ 
+  private:
+   ~LayoutThemeIOS() override;
+diff --git a/third_party/blink/renderer/core/layout/layout_theme_ios.mm b/third_party/blink/renderer/core/layout/layout_theme_ios.mm
+index 75ced28931e87b8765efb5dd3dc714999f6009b5..ca9bae187714fa75db7cef7e450ee969f0d55b46 100644
+--- a/third_party/blink/renderer/core/layout/layout_theme_ios.mm
++++ b/third_party/blink/renderer/core/layout/layout_theme_ios.mm
+@@ -21,12 +21,21 @@
+ 
+ LayoutThemeIOS::~LayoutThemeIOS() {}
+ 
++// static
++Color LayoutThemeIOS::SystemBlueColor(mojom::blink::ColorScheme color_scheme) {
++  // As of iOS 26.
++  return color_scheme == mojom::blink::ColorScheme::kDark
++             ? Color::FromRGB(0x00, 0x91, 0xFF)
++             : Color::FromRGB(0x00, 0x88, 0xFF);
++}
++
+ Color LayoutThemeIOS::PlatformActiveSelectionBackgroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
+-  return color_scheme == mojom::blink::ColorScheme::kDark
+-             ? Color::FromRGBA32(0xFF99C8FF)
+-             : LayoutThemeMobile::PlatformActiveSelectionBackgroundColor(
+-                   color_scheme);
++  // [ios-blink-sideload] The system's text selection, as in Safari: systemBlue
++  // at 20% opacity (instead of Android's), over text that keeps its color.
++  Color color = SystemBlueColor(color_scheme);
++  color.SetAlpha(0.2f);
++  return color;
+ }
+ 
+ Color LayoutThemeIOS::PlatformActiveSelectionForegroundColor(
+-- 
+2.54.0 (Apple Git-157)
+

@@ -205,10 +205,28 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 
 补丁给 Blink 版的网页视图（`CRCWebViewportContainerView`）装上同样的 `UIFindInteraction`，由新类 `CRCFindInPageController` 提供查找会话：一个 `UIFindSession` 子类，把查找栏里的文字交给 content 的查找（`WebContents::Find`，关闭时 `StopFinding`）。Blink 自己高亮所有匹配（黄色，当前项橙色）并滚到当前项；它的回复（`WebContentsObserver::DidReceiveFindReply`，由 `ContentWebState` 转过来）给出匹配数和当前是第几个，会话据此更新 `resultCount`、`highlightedResultIndex`，再调 `updateResultCount` 让查找栏刷新"1/5"。`ContentWebState` 的 `IsFindInteractionSupported()` 改为支持，`SetFindInteractionEnabled()` 创建或移除控制器，`GetFindInteraction()` 返回包装。几处细节：
 
+- 新搜索从页面开头重来，只计数和高亮。系统查找栏每次搜索后会立刻自己调一次"下一个"：`_UIFindNavigatorViewController` 在同一个调用里先 `performSearchWithQuery:` 再 `highlightNextResultInDirection:`（lldb 看到的，文档没写），Safari 就是由这一下选中第一个匹配。所以新搜索先 `StopFinding` 清掉上一次的当前项（不清的话 Blink 会从它接着往后找，搜索词没变时还会跳过它），再用 `find_match = false` 只计数和高亮，接着那次"下一个"从页面开头选中第一个并滚过去。第一版新搜索时自己也选中一个，每敲一个字母就往后多挪一格：有 6 处匹配的页面停在第 3 处时打 apple，结果停在 5/6，Safari 是 1/6。用户 2026-10-28 在真机上发现。
 - 回复按请求 ID 过滤：每次新搜索记下它的请求 ID，更早的回复不再采用（content 可能在 `Find()` 返回前就回复，所以 ID 在回调里记下）；`-1` 表示数值没变。
 - Blink 只能按子串查找，不支持全字匹配，所以从查找栏的选项菜单里去掉"全字匹配"（按动作的标识 `wholeWords`，这是在模拟器里看到的，不是文档写的）；"区分大小写"映射到 `match_case`。
 
-模拟器里验证过（2026-10-27）：菜单项可用，点了弹出系统查找栏（在屏幕键盘上方，Chrome 进入全屏）；测试页上用英文键盘搜"apple"是 1/5，五处都高亮、第一个为当前，和同一台模拟器里的 Safari 一样（用拼音键盘打 apple、再点候选栏里同样的"apple"上屏时，两边都是 2/5：上屏前后搜索词没变，查找栏当成了"下一个"）；下一个、上一个逐个滚到对应位置，5/5 之后回到 1/5；开"区分大小写"后是 1/4；搜页面里没有的词显示 0、按钮变灰；拼音输入的"狐狸"能找到；关闭后高亮清除、工具栏恢复，再打开也正常。
+模拟器里验证过（2026-10-27；2026-10-28 修正后重测）：菜单项可用，点了弹出系统查找栏（在屏幕键盘上方，Chrome 进入全屏）；有 6 处 apple 的长页面停在第 3 处时，用英文键盘打"apple"是 1/6，页面滚回第 1 处，和同一台模拟器里的 Safari 一样；用拼音键盘打 apple、再点候选栏里的"apple"上屏，两边也都是 1/6；下一个、上一个逐个滚到对应位置，6/6 之后回到 1/6，1/6 往前是 6/6；在也有"Apple"的页面上开"区分大小写"，1/5 变成 1/4；搜页面里没有的词显示 0、按钮变灰；拼音输入的"狐狸"能找到；关闭后高亮清除、工具栏恢复，再打开也正常。再打开时查找框是空的（Chrome 从菜单打开查找时传的就是空字符串，`browser_coordinator.mm` 里的 `StartFinding(@"")`；Safari 会预填上次的词），右边显示"0"：这时查找会话的方法一个都没被调用（lldb 看到的），是查找栏复用上一次的界面自己显示的。
+
+更正：这里原来写"用拼音上屏时两边都是 2/5：上屏前后搜索词没变，查找栏当成了'下一个'"，是错的。Safari 拼音上屏也是 1/6；2/5 是第一版的问题（见上面第一条），那个测试页上用英文键盘时恰好绕回到 1/5，所以当时没看出来。
+
+### 0023 光标和选区用系统蓝（`third_party/blink/renderer/core/layout/layout_theme_ios.mm`、`caret_display_item_client.cc`、`local_frame_view.cc`、`content/browser/renderer_host/ios_extended_text_input_traits.mm`）
+
+用户 2026-10-28 在真机上发现选区拖柄和选区的颜色不对。在模拟器里和 Safari 取色对比：拖柄是纯蓝 (0, 0, 255)，因为 content 里写死了 `[UIColor blueColor]`；选区是安卓的青色，因为 Blink 的 iOS 主题（`LayoutThemeIOS`）沿用了安卓的 `LayoutThemeMobile`，40% 不透明的 Holo 蓝 `#33B5E5`，选中的字还被改成黑色，深色模式下是浅蓝底配深灰字；输入框里的光标是 Blink 画的竖线，1 pt 宽，和文字同色。Safari 里三样都是系统蓝（`systemBlue`）：拖柄和光标是纯色，光标 2 pt 宽；选区是 20% 不透明的系统蓝（WebKit 给选区高亮的透明度就是 0.2），字保持原色。
+
+补丁照 Safari 改：
+
+- 拖柄用 `UIColor.systemBlueColor`（动态颜色，深色模式自动换）。
+- `LayoutThemeIOS::PlatformActiveSelectionBackgroundColor()` 返回 20% 不透明的系统蓝；`SupportsSelectionForegroundColors()` 返回 false，选中的字保持原色（Blink 的 Mac 主题也是这样）。
+- 光标：页面没设 `caret-color` 时用系统蓝（`CaretDisplayItemClient`），页面设了就听页面的；宽度 2 pt（`LocalFrameView::BarCaretWidth()`）。
+- 系统蓝的值写在 `LayoutThemeIOS::SystemBlueColor()`：浅色 `#0088FF`，深色 `#0091FF`，是 iOS 26 起的值，用 lldb 在 iOS 27 模拟器里让 UIKit 解析 `systemBlueColor` 读出来的（验证过）。Blink 在渲染线程上，不调 UIKit，所以写成常量；以后 iOS 改了系统蓝，拖柄会跟着变，选区和光标不会。
+
+正版 Chrome iOS（WKWebView）里这几样可能是 Google 蓝：WebKit 在网页视图的 tintColor 不是系统蓝时改用 tintColor，而 Chrome 窗口的 tintColor 是 `#1A73E8`（深色 `#8AB4F8`，lldb 读出来的）。这是读 WebKit 的做法推出来的，没有对照正版（推测）。这里按用户一直对照的 Safari 用系统蓝。
+
+模拟器里验证过（2026-10-28，和同一台模拟器里的 Safari 在同一测试页上取色对比）：长按选中一个词，选区在白底上是 (197, 232, 255)，拖柄是 (0, 139, 255)，和 Safari 的像素值一样；选中的红字保持红色；深色模式下白字保持白色，选区是叠在页面上的 20% 深色系统蓝（Blink 的深色底 #121212 上是 (0, 44, 67)，Safari 的黑底上是 (9, 29, 53)）；textarea 里的光标是系统蓝，6 像素（2 pt）宽，和 Safari 一样；设了 `caret-color: red` 的输入框光标仍然是红色。没改的：输入框聚焦时的焦点框还是 Blink 的橙色（Safari 是蓝色），textarea 的默认字体是等宽字体（Safari 是系统字体）。
 
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 

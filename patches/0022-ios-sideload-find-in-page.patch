@@ -10,22 +10,27 @@ find navigator (UIFindInteraction).
 
 Give the Blink web view the same system find navigator, with a find
 session (a UIFindSession subclass) that searches through content's find
-(WebContents::Find, StopFinding). Blink highlights the matches and
-scrolls to the active one; its replies (DidReceiveFindReply) give the
+(WebContents::Find, StopFinding). The navigator asks for the next result
+right after each search, and that one should be the first match on the
+page, as in Safari: so a search starts over (StopFinding clears the
+last search's active match, which Blink would go on from) and only
+counts and highlights the matches (find_match = false). Blink scrolls
+to the active match; its replies (DidReceiveFindReply) give the
 navigator the match count and which match is active. Blink finds
 substrings only, so the navigator's Whole Words option is removed;
 Match Case works.
 
 Status: verified at Chromium 4558926c in the iOS 27 simulator: Chrome's
 "Find in Page" menu item is enabled and shows the system find navigator
-above the on-screen keyboard; "apple" on a test page shows 1/5 with all
-five matches highlighted and the first one active, as in Safari on the
-same simulator (both show 2/5 when the word is typed with the Pinyin
-keyboard and committed from its candidate bar: committing the same text
-moves to the next match); Next and Previous
-move through the matches, scrolling to each, and wrap from 5/5 to 1/5;
-Match Case leaves 1/4; a word that is not on the page shows 0; a
-Chinese word typed with the Pinyin keyboard is found; closing the
+above the on-screen keyboard; on a page with six matches scrolled to
+the third, typing "apple" shows 1/6 and scrolls to the first match, as
+Safari on the same simulator does, also when the word is typed with the
+Pinyin keyboard and committed from its candidate bar (selecting a match
+in the search as well went one match further with every letter, and
+ended at 5/6); Next and Previous move through the matches, scrolling to
+each, and wrap from 6/6 to 1/6 and back; Match Case turns 1/5 into 1/4
+on a page that also has "Apple"; a word that is not on the page shows
+0; a Chinese word typed with the Pinyin keyboard is found; closing the
 navigator clears the highlights, and Find opens again afterwards.
 
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
@@ -203,10 +208,10 @@ index 0000000000000000000000000000000000000000..e622ab2771427881d8db93859d482892
 +#endif  // IOS_WEB_CONTENT_WEB_STATE_CRC_FIND_IN_PAGE_CONTROLLER_H_
 diff --git a/ios/web/content/web_state/crc_find_in_page_controller.mm b/ios/web/content/web_state/crc_find_in_page_controller.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..c47d74198861396c061a7b7da865be6ab24ebd59
+index 0000000000000000000000000000000000000000..7636523843e987a934a5c6be0da2465c9ca3ebc3
 --- /dev/null
 +++ b/ios/web/content/web_state/crc_find_in_page_controller.mm
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,223 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -287,8 +292,10 @@ index 0000000000000000000000000000000000000000..c47d74198861396c061a7b7da865be6a
 +  _matchCase =
 +      options && !(options.stringCompareOptions & NSCaseInsensitiveSearch);
 +  [self clearResults];
++  // Every search starts over from the top of the page. Blink would go on from
++  // the active match of the last search, and past it if the text is the same.
++  [self stopFinding];
 +  if (_query.empty()) {
-+    [self stopFinding];
 +    return;
 +  }
 +  [self findForward:YES newSession:YES];
@@ -334,6 +341,10 @@ index 0000000000000000000000000000000000000000..c47d74198861396c061a7b7da865be6a
 +  options->forward = forward;
 +  options->match_case = _matchCase;
 +  options->new_session = newSession;
++  // The find navigator asks for the next result right after each search, which
++  // makes the first match the active one, so a search only counts and
++  // highlights the matches.
++  options->find_match = !newSession;
 +  // Content can reply before Find() returns, so take the request's ID as soon
 +  // as it is known.
 +  int* sessionID = &_sessionID;
