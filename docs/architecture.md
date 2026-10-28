@@ -267,6 +267,24 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 
 模拟器里验证过（2026-10-28，测试页逐个请求，结果通过本地服务器的日志读出来）：`permissions.query` 对定位、读剪贴板、摄像头、麦克风是 prompt，写剪贴板 granted，通知 denied；请求定位先弹 iOS 的系统提示，再弹"localhost:8765 想使用您设备的位置信息"，允许后拿到模拟的位置（`simctl location` 设的上海），再请求不再问；读剪贴板先弹本补丁的提示，允许后 iOS 还会问"Chromium 想从 CoreSimulatorBridge 粘贴"（内容来自别的 App 时的系统行为），之后读到文字，再读不再问；选"不允许"后报 `NotAllowedError`，再请求不再问；写剪贴板不提示、写入成功；模拟器没有摄像头，用 `--use-fake-device-for-media-stream` 启动给它一个虚拟摄像头：请求时弹 Chrome 的摄像头提示，"允许一次"后拿到视频轨道，同一页面再请求不问，重新加载后再问。上一轮选过"在访问期间允许"的 localhost 之后直接允许、不再提示，说明 Chrome 把它按网站存下了；`kDomainLevelSitePermissions` 默认是关的，本地构建里大概是测试用的功能开关配置打开了它（推测，没查）。没验证的：真机上的真摄像头和麦克风。Blink 的定位超时从请求一开始就计时，等提示的时间也算在内（上游行为，和 Chrome 一样），所以页面设的超时较短时，第一次请求可能在答完提示前就超时。
 
+### 0027 选区的形状、放大镜和振动像 Safari（`third_party/blink/renderer/core/layout/inline/inline_cursor.cc`、`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`、`ios/web/content/ui/content_context_menu_controller.mm`）
+
+用户 2026-10-28 指出选区"形状与动画"还是有点怪，而且不会振动。在模拟器里和 Safari 逐项对比（截图取色量尺寸；录屏后用 AVFoundation 逐帧导出）：
+
+- 形状：多行选区里，我们每行在文字末尾（加一个空格宽）就断开，右边参差不齐；Safari 除最后一行外，每行都延伸到内容区右边缘，拼成一整块。
+- 拖柄：我们的圆点只有 31 像素（约 10pt），Safari 是 47 像素（约 16pt）。上游有一段代码把 BrowserEngineKit 的 16.5pt 圆点当成 bug，按拖柄高度缩小，最小到 0.65 倍；可这正是 Safari 的大小。拖动拖柄时系统又会把圆点恢复原大，于是两个圆点一大一小。
+- 动画：Safari 长按选中词的那一帧，高亮和拖柄直接以原大小出现（没有缩放动画），同时出现放大镜，手指不松开时放大镜跟着选区末端，移动手指会扩展选区；松手后放大镜消失，编辑菜单才出来。我们没有放大镜，菜单在手指还按着时就弹出。拖拖柄时系统本来就会显示放大镜（录屏看到的），这部分两边一样。
+- 振动：长按选字由 Blink 处理，系统的文本交互不知道选区变了，所以不振。用 lldb 看过：我们的 app 里长按时只有链接预览那类点按交互在准备触感；Chrome 地址栏（原生输入框）里长按、拖拖柄也没有调用选区触感，所以 Safari 的振动大概是 WebKit 自己加的（推测，系统不允许附加到 Safari 验证）。上游还把系统的文本手势全关了（`textInteractionGesture:shouldBeginAtPoint:` 一律返回 NO），系统自己的放大镜手势不会启动。
+
+补丁：
+
+- Blink：选区跨到下一行时，行尾那段高亮补到所在块内容区的末端（`ExpandedSelectionRectForSoftLineBreakIfNeeded()`，只在 iOS 上），各行拼成一整块。
+- 去掉上游缩小圆点的代码，圆点保持 BrowserEngineKit 的 16.5pt。
+- 长按：Blink 收到长按时记下位置；Chrome 的编辑菜单请求（0015）改为交给网页视图（`presentEditMenuWhenTouchesEnd`）。手指还按着时不弹菜单，而是振一下、用系统的放大镜接口（`UITextLoupeSession`）显示放大镜；移动手指时扩展选区（`MoveRangeSelectionExtent`，输入框里只有光标时移动光标 `MoveCaret`），放大镜跟着走，这期间触摸不再交给页面滚动；松手后收起放大镜、弹出菜单。
+- 振动：长按选中文字或在输入框里放下光标时，以及拖拖柄、长按后拖动使选中文字变化时，用 `UISelectionFeedbackGenerator` 振一下。
+
+模拟器里验证过（2026-10-28，和同一台模拟器里的 Safari 在同样的页面上对比截图、逐帧看录屏）：脚本选中的三行文字，前两行都延伸到右边缘，和 Safari 一样；拖柄圆点 47 像素，和 Safari 一样（之前 31 像素）；长按选中词后，手指按着时显示放大镜，松手后才弹出编辑菜单；按着不松再移动，选区扩展到下一行；挂上调试器看到：长按选中时振一次，按着拖动或拖拖柄时选区每变一次振一次，在空输入框里长按时也振一次（松手后菜单里有"粘贴"）；长按链接照常弹出 Chrome 的链接菜单，不显示放大镜、不振。模拟器里感觉不到振动，真机待确认。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：

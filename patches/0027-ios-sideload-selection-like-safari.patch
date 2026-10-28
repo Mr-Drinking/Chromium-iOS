@@ -1,0 +1,313 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 28 Oct 2026 23:59:49 +0800
+Subject: [PATCH] iOS sideload: selection shape, loupe and haptics like Safari
+
+Next to Safari's, text selection still looked and felt off:
+
+- A selection over several lines ended each line with its text (plus a
+  space), so its right side was ragged. On iOS it covers the rest of
+  every line but the last, up to the content edge, as one block. Blink
+  now extends the soft line break's selection rect that far on iOS
+  (ExpandedSelectionRectForSoftLineBreakIfNeeded()).
+- The handles' dots were shrunk to as little as 0.65 by upstream code
+  that took BrowserEngineKit's 16.5-point dots for a bug, but those are
+  the size Safari shows; and dragging a handle made its dot full size
+  again, so the two dots differed. They are no longer shrunk.
+- A long press showed the edit menu at once and no loupe. In Safari the
+  loupe shows while the finger stays down, moving the finger extends
+  the selection (or moves the caret in a text field), and the menu
+  shows when the finger lifts. RenderWidgetUIView now does that with
+  UITextLoupeSession, MoveRangeSelectionExtent() and MoveCaret(); the
+  embedder's edit menu request goes through it
+  (presentEditMenuWhenTouchesEnd).
+- Nothing vibrated: the selection changes come from Blink, so the
+  system's text interaction never plays its haptics. The view ticks
+  (UISelectionFeedbackGenerator) when a long press selects text or puts
+  the caret in a field, and as a dragged handle or held long press
+  changes the selection.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator, against
+Safari on the same pages (screenshots, and recordings read frame by
+frame): a script-made selection over three lines now covers lines one
+and two up to the right edge, like Safari's; the handles' dots are 47
+pixels, as in Safari (31 before); a long press selects the word, shows
+the loupe while the finger stays down and the edit menu when it lifts;
+holding and moving the finger extends the selection over the next
+line; with a debugger attached, UISelectionFeedbackGenerator ticks
+once when the long press selects the word, at every change while the
+held finger or a dragged handle extends it, and when a long press puts
+the caret in an empty field (whose menu then offers Paste); long-
+pressing a link still shows Chrome's link menu, with no loupe or tick.
+Haptics can't be felt in the simulator.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index c5a50b833b97de2978e37ae5769e524f001a0520..f58bc11361e8523799938beb58304cb10c9edc98 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -691,6 +691,9 @@ bool IsTesting() {
+ #if !BUILDFLAG(IS_IOS_TVOS)
+   if (gesture.type() == ui::EventType::kGestureTap) {
+     [ui_view_->view_ willSendTap];
++  } else if (gesture.type() == ui::EventType::kGestureLongPress) {
++    [ui_view_->view_ longPressDidBeginAtPoint:CGPointMake(gesture.x,
++                                                          gesture.y)];
+   }
+ #endif
+   SendGestureEvent(web_gesture);
+@@ -871,25 +874,9 @@ bool IsTesting() {
+     [[ui_view_->view_ textInteraction] refreshKeyboardUI];
+     [[ui_view_->view_ textInteraction] textSelectionDisplayInteraction]
+         .activated = YES;
+-
+-    // This seems like a bug. BETextInput always sets the
+-    // textSelectionDisplayInteraction lolipop dot size to 16.5,16.5, expecting
+-    // the entire web content to be transformed down for some reason. Instead,
+-    // scale it down here with a very naive implementation.
+-    UITextSelectionDisplayInteraction* textSelectionDisplayInteraction =
+-        [ui_view_->view_ textInteraction].textSelectionDisplayInteraction;
+-    NSArray<UIView<UITextSelectionHandleView>*>* handleViews =
+-        textSelectionDisplayInteraction.handleViews;
+-
+-    CGFloat shrink = handleViews[0].subviews[0].frame.size.height / 20;
+-    shrink = std::max(std::min(shrink, 1.0), 0.65);
+-    handleViews[0].subviews[1].layer.transform =
+-        CATransform3DMakeScale(shrink, shrink, 1);
+-
+-    shrink = handleViews[1].subviews[0].frame.size.height / 20;
+-    shrink = std::max(std::min(shrink, 1.0), 0.65);
+-    handleViews[1].subviews[1].layer.transform =
+-        CATransform3DMakeScale(shrink, shrink, 1);
++    // [ios-blink-sideload] The handles' dots are no longer shrunk: at 16.5
++    // points they are the size Safari shows, and dragging a handle made its
++    // dot full size again, so the two dots differed.
+   } else {
+     // [ios-blink-sideload] -selectionDidClear deactivates the selection
+     // display, except for a caret in a text field.
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+index 5bbba9564a38be712d91c82b1ec9e865f24895c7..1ba5744901b76c80ceff6dcf499890602715f9b1 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+@@ -52,6 +52,17 @@ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+   // whether the edit menu waits to show for that tap.
+   int32_t _caretTapNodeId;
+   BOOL _caretTapPending;
++  // [ios-blink-sideload] For a long press: where it was, whether the finger is
++  // still down, the loupe it shows, and whether the edit menu waits for the
++  // finger to lift. The haptics of selection changes, whether a selection
++  // handle is being dragged, and the length of the selected text.
++  CGPoint _longPressPoint;
++  BOOL _longPressHeld;
++  UITextLoupeSession* _longPressLoupe;
++  BOOL _presentEditMenuOnTouchesEnd;
++  UISelectionFeedbackGenerator* _selectionFeedback;
++  BOOL _selectionHandleDragged;
++  NSUInteger _selectedTextLength;
+ }
+ 
+ - (instancetype)initWithWidget:
+@@ -76,6 +87,11 @@ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+ // the renderer has handled it.
+ - (void)willSendTap;
+ - (void)tapDidEnd;
++// [ios-blink-sideload] Called when a long press is sent to the renderer, and
++// (by the embedder) to show the edit menu once the touches that asked for it
++// end.
++- (void)longPressDidBeginAtPoint:(CGPoint)point;
++- (void)presentEditMenuWhenTouchesEnd;
+ - (void)updateView:(UIScrollView*)view;
+ - (void)removeView;
+ @end
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index f77e728317376ea7b7138c849d88b97f798f992e..d1ccf08a691341e5dccd9c3dfc75485aeb38ad16 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -354,11 +354,18 @@ - (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+   }
+   if (event.allTouches.count == 1) {
+     _viewOffsetDuringTouchSequence.reset();
++    [self longPressDidEndShowingMenu:YES];
+   }
+ }
+ 
+ - (void)touchesMoved:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+   CHECK(_view);
++  // [ios-blink-sideload] While a long press shows the loupe, moving the finger
++  // changes the selection, not the page's scroll position.
++  if (_longPressLoupe) {
++    [self longPressDidMoveToPoint:[touches.anyObject locationInView:self]];
++    return;
++  }
+   for (UITouch* touch in touches) {
+     _view->OnTouchEvent(input::WebTouchEventBuilder::Build(
+         blink::WebInputEvent::Type::kTouchMove, touch, event, self,
+@@ -374,6 +381,7 @@ - (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+         _viewOffsetDuringTouchSequence));
+   }
+   _viewOffsetDuringTouchSequence.reset();
++  [self longPressDidEndShowingMenu:NO];
+ }
+ 
+ - (void)observeValueForKeyPath:(NSString*)keyPath
+@@ -1169,7 +1177,15 @@ - (void)selectionBoundsDidChange {
+   // bounds, so the copy kept the old bounds or none: the selection handles
+   // never showed, and the edit menu went to the top of the view. Refreshing
+   // dismisses the edit menu, so show it again.
+-  if (![self selectedText].length) {
++  // [ios-blink-sideload] As in Safari, the phone ticks as a dragged handle or
++  // a held long press changes the selection.
++  const NSUInteger selectedTextLength = [self selectedText].length;
++  if ((_selectionHandleDragged || _longPressLoupe) && _selectedTextLength &&
++      selectedTextLength && selectedTextLength != _selectedTextLength) {
++    [[self selectionFeedback] selectionChanged];
++  }
++  _selectedTextLength = selectedTextLength;
++  if (!selectedTextLength) {
+     [self updateCaretInteraction];
+     return;
+   }
+@@ -1218,6 +1234,63 @@ - (void)presentEditMenuForCaretTap {
+   }
+ }
+ 
++- (void)longPressDidBeginAtPoint:(CGPoint)point {
++  // [ios-blink-sideload] As in Safari: when a long press selects text, or puts
++  // the caret in a text field, the phone ticks, a loupe shows while the finger
++  // stays down, moving the finger extends the selection (or moves the caret),
++  // and the edit menu shows when the finger lifts.
++  _longPressPoint = point;
++  _longPressHeld = YES;
++  [[self selectionFeedback] prepare];
++}
++
++- (void)presentEditMenuWhenTouchesEnd {
++  if (!_longPressHeld) {
++    [text_interaction_ presentEditMenuForSelection];
++    return;
++  }
++  _presentEditMenuOnTouchesEnd = YES;
++  if (!_longPressLoupe) {
++    [[self selectionFeedback] selectionChanged];
++    _longPressLoupe =
++        [UITextLoupeSession beginLoupeSessionAtPoint:_longPressPoint
++                             fromSelectionWidgetView:nil
++                                              inView:self];
++  }
++}
++
++- (void)longPressDidMoveToPoint:(CGPoint)point {
++  if (!_view) {
++    return;
++  }
++  const gfx::Point extent = gfx::ToRoundedPoint(gfx::PointF(point.x, point.y));
++  if ([self selectedText].length) {
++    _view->host()->delegate()->MoveRangeSelectionExtent(extent);
++  } else {
++    _view->host()->delegate()->MoveCaret(extent);
++  }
++  auto* region = [self selectionRegion];
++  [_longPressLoupe moveToPoint:point
++                 withCaretRect:region ? RectForBound(region->focus) : CGRectNull
++                 trackingCaret:NO];
++}
++
++- (void)longPressDidEndShowingMenu:(BOOL)showMenu {
++  _longPressHeld = NO;
++  [_longPressLoupe invalidate];
++  _longPressLoupe = nil;
++  if (std::exchange(_presentEditMenuOnTouchesEnd, NO) && showMenu) {
++    [text_interaction_ presentEditMenuForSelection];
++  }
++}
++
++- (UISelectionFeedbackGenerator*)selectionFeedback {
++  if (!_selectionFeedback) {
++    _selectionFeedback = [[UISelectionFeedbackGenerator alloc] init];
++  }
++  return _selectionFeedback;
++}
++
+ - (void)updateCaretInteraction {
+   // [ios-blink-sideload] Keep the system text interaction active for a caret in
+   // a text field, as WebKit does, so that its edit menu can show there, with
+@@ -1297,6 +1370,8 @@ - (void)adjustSelectionBoundaryToPoint:(CGPoint)point
+     _selectionDragBase = MiddleOfBound(base);
+     _selectionDragBaseTop = base.edge_start().y();
+     _selectionDragBaseBottom = base.edge_end().y();
++    _selectionHandleDragged = YES;
++    [[self selectionFeedback] prepare];
+   } else {
+     _view->host()->delegate()->SelectRange(
+         _selectionDragBase, gfx::ToRoundedPoint(gfx::PointF(point.x, point.y)));
+@@ -1324,6 +1399,7 @@ - (void)adjustSelectionBoundaryToPoint:(CGPoint)point
+   // -selectionBoundsDidChange).
+   if (touch != BESelectionTouchPhaseStarted &&
+       touch != BESelectionTouchPhaseMoved) {
++    _selectionHandleDragged = NO;
+     _presentEditMenuOnSelectionUpdate = YES;
+     [text_interaction_ presentEditMenuForSelection];
+   }
+diff --git a/ios/web/content/ui/content_context_menu_controller.mm b/ios/web/content/ui/content_context_menu_controller.mm
+index 1bdca76040d9b85d47518c21441ab81703573461..4014c4e11fbaa7e98ad5656e90cdfaa588dea269 100644
+--- a/ios/web/content/ui/content_context_menu_controller.mm
++++ b/ios/web/content/ui/content_context_menu_controller.mm
+@@ -137,6 +137,11 @@ - (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
+ 
+ @end
+ 
++// [ios-blink-sideload] Implemented by content's RenderWidgetUIView.
++@protocol CRCEditMenuPresenting
++- (void)presentEditMenuWhenTouchesEnd;
++@end
++
+ namespace {
+ 
+ // [ios-blink-sideload] Whether `params` asks for a menu for text, rather than
+@@ -152,6 +157,12 @@ bool IsEditMenuRequest(const content::ContextMenuParams& params) {
+ // links and images. The view's text interaction asks the view which actions
+ // to offer, and sends them to it.
+ void PresentEditMenu(UIView* view) {
++  // The web view waits for a long press to end before it shows the menu, as
++  // Safari does.
++  if ([view respondsToSelector:@selector(presentEditMenuWhenTouchesEnd)]) {
++    [(id<CRCEditMenuPresenting>)view presentEditMenuWhenTouchesEnd];
++    return;
++  }
+   for (id<UIInteraction> interaction in view.interactions) {
+     if (BETextInteraction* text_interaction =
+             base::apple::ObjCCast<BETextInteraction>(interaction)) {
+diff --git a/third_party/blink/renderer/core/layout/inline/inline_cursor.cc b/third_party/blink/renderer/core/layout/inline/inline_cursor.cc
+index 740505fc82ac88d655ebc76fee63c6c0ff6862c6..9320184a04c395e9f81f6ddc4ae93fbe6d69613d 100644
+--- a/third_party/blink/renderer/core/layout/inline/inline_cursor.cc
++++ b/third_party/blink/renderer/core/layout/inline/inline_cursor.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/compiler_specific.h"
+ #include "base/containers/span.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/core/editing/frame_selection.h"
+ #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
+ #include "third_party/blink/renderer/core/html/html_br_element.h"
+@@ -47,6 +48,19 @@ LogicalRect ExpandedSelectionRectForSoftLineBreakIfNeeded(
+   const LayoutBlockFlow* const layout_block_flow = cursor.GetLayoutBlockFlow();
+   if (layout_block_flow && layout_block_flow->ShouldTruncateOverflowingText())
+     return rect;
++#if BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] As on iOS, a selection that goes on to the next line
++  // covers the rest of this one, up to its block's content edge, so that the
++  // lines form one block instead of ending with the text.
++  PhysicalRect content_rect = cursor.ContainerFragment().ContentRect();
++  content_rect.offset -= cursor.Current().OffsetInContainerFragment();
++  const LayoutUnit content_end =
++      cursor.Current().ConvertChildToLogical(content_rect).InlineEndOffset();
++  if (content_end > rect.InlineEndOffset()) {
++    return {rect.offset,
++            {content_end - rect.offset.inline_offset, rect.size.block_size}};
++  }
++#endif
+   // Copy from InlineTextBoxPainter::PaintSelection.
+   const LayoutUnit space_width(
+       cursor.Current().Style().GetFont()->SpaceWidth());
+-- 
+2.54.0 (Apple Git-157)
+
