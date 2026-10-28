@@ -228,6 +228,45 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 
 模拟器里验证过（2026-10-28，和同一台模拟器里的 Safari 在同一测试页上取色对比）：长按选中一个词，选区在白底上是 (197, 232, 255)，拖柄是 (0, 139, 255)，和 Safari 的像素值一样；选中的红字保持红色；深色模式下白字保持白色，选区是叠在页面上的 20% 深色系统蓝（Blink 的深色底 #121212 上是 (0, 44, 67)，Safari 的黑底上是 (9, 29, 53)）；textarea 里的光标是系统蓝，6 像素（2 pt）宽，和 Safari 一样；设了 `caret-color: red` 的输入框光标仍然是红色。没改的：输入框聚焦时的焦点框还是 Blink 的橙色（Safari 是蓝色），textarea 的默认字体是等宽字体（Safari 是系统字体）。
 
+### 0024 请求桌面版网站（`ios/web/content/navigation/content_navigation_{manager,item}.mm`）
+
+用户 2026-10-28 在真机上发现"请求切换到桌面版网站"不起作用。Chrome 的菜单项调用 `NavigationManager::ReloadWithUserAgentType()`，Blink 版的实现是上游留下的 `NOTIMPLEMENTED()`，点了什么都不发生；条目的 `GetUserAgentType()` 也只是一个默认"移动版"的成员变量。
+
+补丁照安卓版 Chrome 的做法（`NavigationControllerAndroid::SetUseDesktopUserAgent()`）：
+
+- 第一次请求桌面版时，给 WebContents 设上桌面版的 UA 覆盖：Mac 版 Chrome 的 UA（`Macintosh; Intel Mac OS X 10_15_7`，安卓用的是 Linux 的），客户端提示也改成 `macOS`、非移动设备（照搬安卓的 `JNI_ContentUtils_SetUserAgentOverride`）。
+- 在最近一次提交的条目上 `SetIsOverridingUserAgent()`，再 `LoadOriginalRequestURL()` 按原始请求网址重新加载（手机版跳到 m. 站点的网站会回到原网址）。
+- 之后在这个标签页里点链接、输网址，content 都沿用当前条目的覆盖设置，直到切回移动版；新标签页从移动版开始。
+- 条目的 `GetUserAgentType()`/`SetUserAgentType()` 改成读写条目上的覆盖标志，菜单据此在"桌面版 / 移动版"两项之间切换。
+
+模拟器里验证过（2026-10-28，测试页显示请求头里的 UA、`navigator.userAgent` 和 `navigator.userAgentData`）：请求桌面版后页面重新加载，两处都是 Mac 版 Chrome 的 UA，客户端提示 `mobile` 为 false、平台 `macOS`；重新加载、点链接都保持桌面版；菜单变成"请求切换到移动版网站"，点了恢复 iPhone 的 UA。`navigator.platform` 仍是 `iPhone`：UA 覆盖接口不改它，安卓版 Chrome 的桌面模式也一样。
+
+### 0025 空输入框也能粘贴（`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`）
+
+用户 2026-10-28 在真机上发现空的文本框没法粘贴。系统的编辑菜单（0019）只在有选中文字时弹得出来：上游在选区为空时把系统文本交互的选区显示（`UITextSelectionDisplayInteraction`）关掉，0019 也只在有选中文字时刷新系统那份选区副本（`refreshKeyboardUI`）。输入框里只有光标时，长按后 Blink 照样发出编辑菜单请求，0015 也调了 `presentEditMenuForSelection`，但系统不知道光标在哪，菜单不出来。用 lldb 在运行中的 app 里验证过：光标状态下手动激活选区显示、刷新、再弹菜单，"粘贴"就出来了；但激活后系统会再画一个自己的光标，和 Blink 画的并排。
+
+补丁：
+
+- 可编辑区域里只有光标时，保持选区显示激活（WebKit 也是这样），光标移动时刷新系统的选区副本；输入法正在组字（有标记文字）时不刷新，免得打断。
+- 系统自己的光标换成一个什么都不画的视图（`BEHiddenTextCursorView`），光标仍由 Blink 画。
+- 点按：Safari 里，已有光标的输入框再点一下，只要光标没被移动（空框里点哪都一样，有字时点在光标上），就弹出编辑菜单。系统的交互不替 Blink 处理这种点按（用 lldb 看过，点按时它不会来问菜单），所以自己做：点按发给 Blink 前记下当时聚焦的输入框（`TextInputState::node_id`），Blink 处理完（收到这次点按的回执）后等 150 毫秒，期间光标没动、还是同一个输入框，就弹出菜单。
+- "全选"只在输入框里有文字时出现（Safari 也是这样）。
+
+模拟器里验证过（2026-10-28，和同一台模拟器里的 Safari 对照）：空输入框第一次点只聚焦，再点一次弹出"粘贴"，长按也是；点"粘贴"后内容贴进去，页面收到 paste 和 input 事件。有字的输入框里，移动光标的点按不弹菜单，点在光标上弹出"粘贴 / 选择 / 全选"。只有一个光标；拼音组字、选候选字上屏照常；长按普通文字照样选中一个词、出现拖柄和菜单。
+
+### 0026 网站权限：定位、剪贴板、摄像头和麦克风（`ios/web/content/content_permission_manager.mm`、`content_browser_context.mm`、`web_state/content_web_state.mm`、`init/ios_browser_main_parts.mm`）
+
+用户 2026-10-28 在真机上发现网页请求不了位置、剪贴板等权限。原因：Blink 版的浏览器上下文没有权限委托（`GetPermissionControllerDelegate()` 返回空），content 于是对所有权限一律直接拒绝、不提示：定位报"User denied Geolocation"，读写剪贴板都是 `NotAllowedError`，`permissions.query` 全是 denied。摄像头、麦克风走另一条路（`WebContentsDelegate::RequestMediaAccessPermission()`），`ContentWebState` 没实现，也直接拒绝。另外 iOS 上定位固定用 Core Location（`kPlatformOnly`），需要浏览器客户端提供"系统定位权限管理器"，content 的默认实现返回空，一旦允许了网页定位就会撞上 `CHECK`（读源码确认）。
+
+补丁：
+
+- 新的 `ContentPermissionManager`（`content::PermissionControllerDelegate`）：写剪贴板直接允许（和 Chrome 一样）；定位、读剪贴板弹提示框问用户，答案按顶层网页的源记住，直到 app 退出；页面不可见时不弹，按拒绝处理；其余权限照旧拒绝（通知等 iOS 版本来就不支持）。
+- 提示框的文字用 components 里移动端已有的翻译（`IDS_GEOLOCATION_INFOBAR_TEXT`"…想使用您设备的位置信息"、`IDS_CLIPBOARD_INFOBAR_TEXT`"…想查看复制到剪贴板的文字和图片"、`IDS_PERMISSION_ALLOW`/`IDS_PERMISSION_DONT_ALLOW`），没有新加字符串。
+- 摄像头、麦克风：`ContentWebState::RequestMediaAccessPermission()` 用 Chrome 给 WKWebView 用的同一个提示（`WebStateDelegate::HandlePermissionsDecisionRequest()`，"允许一次 / 在访问期间允许 / 一律不允许"）。提示只回"允许 / 拒绝"，所以答案按 WebKit 的做法记到换页为止；"在访问期间允许""一律不允许"由 Chrome 自己按网站保存（本地构建里是这样，见下）。允许后按页面要求的设备（没指定就用第一个）回给 content，选设备的写法参考了 Chromecast 的实现。
+- 浏览器客户端返回系统定位权限管理器（`SystemGeolocationSourceApple`，和 content_shell 的 iOS 版一样），在 Objective-C++ 的 `IOSBrowserMainParts` 里创建（头文件里有 Objective-C 类型，不能从 `.cc` 引用）。页面一用定位，content 先请求 app 的定位权限（iOS 的系统提示，文字是 Chrome 自带的"Chromium 会将您的位置信息分享给您允许的网站"），再问网站权限（本补丁的提示）。
+
+模拟器里验证过（2026-10-28，测试页逐个请求，结果通过本地服务器的日志读出来）：`permissions.query` 对定位、读剪贴板、摄像头、麦克风是 prompt，写剪贴板 granted，通知 denied；请求定位先弹 iOS 的系统提示，再弹"localhost:8765 想使用您设备的位置信息"，允许后拿到模拟的位置（`simctl location` 设的上海），再请求不再问；读剪贴板先弹本补丁的提示，允许后 iOS 还会问"Chromium 想从 CoreSimulatorBridge 粘贴"（内容来自别的 App 时的系统行为），之后读到文字，再读不再问；选"不允许"后报 `NotAllowedError`，再请求不再问；写剪贴板不提示、写入成功；模拟器没有摄像头，用 `--use-fake-device-for-media-stream` 启动给它一个虚拟摄像头：请求时弹 Chrome 的摄像头提示，"允许一次"后拿到视频轨道，同一页面再请求不问，重新加载后再问。上一轮选过"在访问期间允许"的 localhost 之后直接允许、不再提示，说明 Chrome 把它按网站存下了；`kDomainLevelSitePermissions` 默认是关的，本地构建里大概是测试用的功能开关配置打开了它（推测，没查）。没验证的：真机上的真摄像头和麦克风。Blink 的定位超时从请求一开始就计时，等提示的时间也算在内（上游行为，和 Chrome 一样），所以页面设的超时较短时，第一次请求可能在答完提示前就超时。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：

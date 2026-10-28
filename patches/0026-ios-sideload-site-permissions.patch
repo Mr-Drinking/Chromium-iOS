@@ -1,0 +1,844 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 28 Oct 2026 23:28:57 +0800
+Subject: [PATCH] iOS sideload: site permissions for location, clipboard,
+ camera, mic
+
+The browser context had no permission delegate, so content denied
+every permission without asking: geolocation failed with "User denied
+Geolocation", reading and even writing the clipboard was
+NotAllowedError, and permissions.query() said denied for everything.
+Camera and microphone requests (WebContentsDelegate::
+RequestMediaAccessPermission()) were denied too. And on iOS the device
+service gets the location from Core Location, which needs the
+embedder's GeolocationSystemPermissionManager; without one it would
+CHECK-fail once a page was allowed the location.
+
+Add ContentPermissionManager: writing to the clipboard is allowed, as
+in Chrome; the location and reading the clipboard are asked for with an
+alert, using the mobile strings components already has
+(IDS_GEOLOCATION_INFOBAR_TEXT, IDS_CLIPBOARD_INFOBAR_TEXT,
+IDS_PERMISSION_ALLOW, IDS_PERMISSION_DONT_ALLOW); everything else is
+still denied. Answers are kept for the top-level origin until the app
+quits; a page that is not visible is not asked. ContentWebState asks
+for the camera and the microphone with the embedder's prompt, the one
+WKWebView's requests get (WebStateDelegate::
+HandlePermissionsDecisionRequest()), keeps the answer until another
+page shows (as WebKit does; the prompt's "allow once" and "allow while
+visiting" both come back as allow), and picks the requested devices (or
+the first) as Chromecast does. IOSBrowserMainParts creates the system
+location permission manager, as content_shell does on iOS.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator with a
+test page: permissions.query() says prompt for geolocation,
+clipboard-read, camera and microphone, granted for clipboard-write and
+denied for notifications; getCurrentPosition() shows the system
+location prompt for the app, then "<site> wants to use your device's
+location" (in Chinese, from the existing strings), and once allowed
+returns the simulated location without asking again; readText() asks
+the same way, then iOS asks to paste from the other app, and the text
+comes back; denying makes readText() fail without asking again;
+writeText() works without a prompt; with --use-fake-device-for-media-
+stream (the simulator has no camera), getUserMedia() shows Chrome's
+camera prompt, "allow once" gives a video track, a second request on
+the page does not ask, and after a reload it asks again. Not verified
+on a device: a real camera and microphone.
+
+diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
+index 56750acb7f278013c2e560186ae344cccaddd8c2..f493dc9733eb332b2009c550b6f8da890ed77c79 100644
+--- a/ios/web/content/BUILD.gn
++++ b/ios/web/content/BUILD.gn
+@@ -17,6 +17,8 @@ source_set("content") {
+   sources = [
+     "content_browser_context.h",
+     "content_browser_context.mm",
++    "content_permission_manager.h",
++    "content_permission_manager.mm",
+     "download/content_download_manager_delegate.h",
+     "download/content_download_manager_delegate.mm",
+     "download/content_download_task.h",
+@@ -58,6 +60,8 @@ source_set("content") {
+     "//components/javascript_dialogs",
+     "//components/js_injection/browser",
+     "//components/js_injection/common:common_mojom",
++    "//components/strings",
++    "//components/url_formatter",
+     "//content/public/browser",
+     "//ios/web/annotations",
+     "//ios/web/common",
+@@ -80,6 +84,8 @@ source_set("content") {
+     "//ios/web/webui",
+     "//net",
+     "//third_party/abseil-cpp:absl",
++    "//third_party/blink/public/common",
++    "//ui/base",
+   ]
+ }
+ 
+diff --git a/ios/web/content/DEPS b/ios/web/content/DEPS
+index fc5fac27a1318d9a2ee07492218f6dc32f06a60e..4989569483ef4f71100b10d22c239c1116ee1668 100644
+--- a/ios/web/content/DEPS
++++ b/ios/web/content/DEPS
+@@ -8,6 +8,10 @@ include_rules = [
+   # keep-sorted end
+ ]
+ specific_include_rules = {
++  "content_permission_manager\\.mm": [
++    "+components/strings/grit/components_strings.h",
++    "+third_party/blink/public/common/permissions/permission_utils.h",
++  ],
+   "content_web_state\\.mm": [
+     "+components/embedder_support/ios/delegate/color_chooser/color_chooser_ios.h",
+     "+components/embedder_support/ios/delegate/file_chooser/file_select_helper_ios.h",
+@@ -15,6 +19,8 @@ specific_include_rules = {
+     "+third_party/blink/public/mojom/favicon/favicon_url.mojom.h",
+     "+third_party/blink/public/mojom/page/page_visibility_state.mojom.h",
+     "+skia/ext/skia_utils_ios.h",
++    "+third_party/blink/public/common/mediastream/media_stream_request.h",
++    "+third_party/blink/public/mojom/mediastream/media_stream.mojom.h",
+   ],
+   "content_navigation_manager\\.mm": [
+     "+components/embedder_support/user_agent_utils.h",
+diff --git a/ios/web/content/content_browser_context.h b/ios/web/content/content_browser_context.h
+index c0d6fd18a79d6c07918b80a4fec7d144da971bd0..f9ad3df60417acf42548d36a4551dfc17cf27762 100644
+--- a/ios/web/content/content_browser_context.h
++++ b/ios/web/content/content_browser_context.h
+@@ -24,6 +24,7 @@ namespace web {
+ 
+ class BrowserContextHolder;
+ class ContentDownloadManagerDelegate;
++class ContentPermissionManager;
+ 
+ // Wraps a web::BrowserState. The lifetime of instances is tied to that
+ // of the corresponding ContentBrowserContext (via SharedUserData).
+@@ -76,6 +77,8 @@ class ContentBrowserContext : public content::BrowserContext {
+   raw_ptr<web::BrowserState> browser_state_ = nullptr;
+   // [ios-blink-sideload] Hands content's downloads to Chrome's download UI.
+   std::unique_ptr<ContentDownloadManagerDelegate> download_manager_delegate_;
++  // [ios-blink-sideload] Site permissions (see ContentPermissionManager).
++  std::unique_ptr<ContentPermissionManager> permission_manager_;
+ };
+ 
+ }  // namespace web
+diff --git a/ios/web/content/content_browser_context.mm b/ios/web/content/content_browser_context.mm
+index 06231782a04e0a7d7d7fe06865b968cc1a2f4655..d7e50658a04b184c8b774c41203771f426dfff7a 100644
+--- a/ios/web/content/content_browser_context.mm
++++ b/ios/web/content/content_browser_context.mm
+@@ -7,6 +7,7 @@
+ #import <Foundation/Foundation.h>
+ 
+ #import "base/strings/sys_string_conversions.h"
++#import "ios/web/content/content_permission_manager.h"
+ #import "ios/web/content/download/content_download_manager_delegate.h"
+ #import "ios/web/public/thread/web_task_traits.h"
+ #import "ios/web/public/thread/web_thread.h"
+@@ -119,7 +120,11 @@
+ 
+ content::PermissionControllerDelegate*
+ ContentBrowserContext::GetPermissionControllerDelegate() {
+-  return nullptr;
++  // [ios-blink-sideload] Without a delegate, content denied every permission.
++  if (!permission_manager_) {
++    permission_manager_ = std::make_unique<ContentPermissionManager>();
++  }
++  return permission_manager_.get();
+ }
+ 
+ content::ClientHintsControllerDelegate*
+diff --git a/ios/web/content/content_permission_manager.h b/ios/web/content/content_permission_manager.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a4d0a7fcfa39764deb3c0860407711bd2cc5a3e
+--- /dev/null
++++ b/ios/web/content/content_permission_manager.h
+@@ -0,0 +1,86 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef IOS_WEB_CONTENT_CONTENT_PERMISSION_MANAGER_H_
++#define IOS_WEB_CONTENT_CONTENT_PERMISSION_MANAGER_H_
++
++#include <map>
++#include <memory>
++#include <utility>
++#include <vector>
++
++#include "base/memory/weak_ptr.h"
++#include "content/public/browser/permission_controller_delegate.h"
++#include "url/origin.h"
++
++namespace web {
++
++// [ios-blink-sideload] Site permissions for Blink. The browser context had no
++// permission delegate, so content denied every request without asking, even
++// writing to the clipboard. As in Chrome, writing to the clipboard is allowed,
++// and a site has to ask for the location and for reading the clipboard, with
++// an alert; the answer lasts for the site until the app quits. The camera and
++// the microphone are asked for with the media request (see
++// ContentWebState::RequestMediaAccessPermission()), so here they stay at
++// "ask". Everything else is denied, as before.
++class ContentPermissionManager : public content::PermissionControllerDelegate {
++ public:
++  ContentPermissionManager();
++  ContentPermissionManager(const ContentPermissionManager&) = delete;
++  ContentPermissionManager& operator=(const ContentPermissionManager&) = delete;
++  ~ContentPermissionManager() override;
++
++  // content::PermissionControllerDelegate:
++  void RequestPermissionsFromCurrentDocument(
++      content::RenderFrameHost* render_frame_host,
++      const content::PermissionRequestDescription& request_description,
++      base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
++          callback) override;
++  blink::mojom::PermissionStatus GetPermissionStatus(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      const GURL& requesting_origin,
++      const GURL& embedding_origin) override;
++  content::PermissionResult GetPermissionResultForOriginWithoutContext(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      const url::Origin& requesting_origin,
++      const url::Origin& embedding_origin) override;
++  content::PermissionResult GetPermissionResultForCurrentDocument(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      content::RenderFrameHost* render_frame_host,
++      bool should_include_device_status) override;
++  content::PermissionResult GetPermissionResultForWorker(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      content::RenderProcessHost* render_process_host,
++      const GURL& worker_origin) override;
++  content::PermissionResult GetPermissionResultForEmbeddedRequester(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      content::RenderFrameHost* render_frame_host,
++      const url::Origin& requesting_origin) override;
++  void ResetPermission(blink::PermissionType permission,
++                       const GURL& requesting_origin,
++                       const GURL& embedding_origin) override;
++
++ private:
++  struct Request;
++
++  // The status of `type` for the site at `origin` (the main frame's).
++  blink::mojom::PermissionStatus GetStatus(blink::PermissionType type,
++                                           const url::Origin& origin) const;
++
++  // Asks for the first permission of the request that still needs an answer,
++  // or answers the request when none does.
++  void PromptNext(int request_id);
++  void OnPromptAnswered(int request_id,
++                        blink::PermissionType type,
++                        bool granted);
++
++  std::map<std::pair<blink::PermissionType, url::Origin>, bool> decisions_;
++  std::map<int, std::unique_ptr<Request>> requests_;
++  int next_request_id_ = 0;
++  base::WeakPtrFactory<ContentPermissionManager> weak_factory_{this};
++};
++
++}  // namespace web
++
++#endif  // IOS_WEB_CONTENT_CONTENT_PERMISSION_MANAGER_H_
+diff --git a/ios/web/content/content_permission_manager.mm b/ios/web/content/content_permission_manager.mm
+new file mode 100644
+index 0000000000000000000000000000000000000000..fa2a10a2676a2971c75233beffe94c8ccf837d65
+--- /dev/null
++++ b/ios/web/content/content_permission_manager.mm
+@@ -0,0 +1,265 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "ios/web/content/content_permission_manager.h"
++
++#import <UIKit/UIKit.h>
++
++#import <algorithm>
++
++#import "base/strings/sys_string_conversions.h"
++#import "components/strings/grit/components_strings.h"
++#import "components/url_formatter/elide_url.h"
++#import "content/public/browser/permission_request_description.h"
++#import "content/public/browser/permission_result.h"
++#import "content/public/browser/render_frame_host.h"
++#import "content/public/browser/visibility.h"
++#import "content/public/browser/web_contents.h"
++#import "third_party/blink/public/common/permissions/permission_utils.h"
++#import "ui/base/l10n/l10n_util.h"
++#import "ui/base/l10n/l10n_util_mac.h"
++
++namespace web {
++
++namespace {
++
++using blink::mojom::PermissionStatus;
++
++// The alert asking for `type`, for the types this manager asks for itself.
++std::optional<int> PromptMessageId(blink::PermissionType type) {
++  switch (type) {
++    case blink::PermissionType::GEOLOCATION:
++      return IDS_GEOLOCATION_INFOBAR_TEXT;
++    case blink::PermissionType::CLIPBOARD_READ_WRITE:
++      return IDS_CLIPBOARD_INFOBAR_TEXT;
++    default:
++      return std::nullopt;
++  }
++}
++
++// Permissions are kept for the site in the main frame, which the prompt names.
++url::Origin SiteOrigin(content::RenderFrameHost* render_frame_host) {
++  return render_frame_host->GetMainFrame()->GetLastCommittedOrigin();
++}
++
++// The view controller to present an alert from, above anything presented.
++UIViewController* TopViewController(UIView* view) {
++  UIViewController* controller = view.window.rootViewController;
++  while (controller.presentedViewController &&
++         !controller.presentedViewController.beingDismissed) {
++    controller = controller.presentedViewController;
++  }
++  return controller;
++}
++
++}  // namespace
++
++struct ContentPermissionManager::Request {
++  url::Origin origin;
++  base::WeakPtr<content::WebContents> web_contents;
++  std::vector<blink::PermissionType> types;
++  std::vector<PermissionStatus> statuses;
++  base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
++      callback;
++};
++
++ContentPermissionManager::ContentPermissionManager() = default;
++
++ContentPermissionManager::~ContentPermissionManager() = default;
++
++PermissionStatus ContentPermissionManager::GetStatus(
++    blink::PermissionType type,
++    const url::Origin& origin) const {
++  switch (type) {
++    case blink::PermissionType::CLIPBOARD_SANITIZED_WRITE:
++      return PermissionStatus::GRANTED;
++    case blink::PermissionType::GEOLOCATION:
++    case blink::PermissionType::CLIPBOARD_READ_WRITE: {
++      auto it = decisions_.find({type, origin});
++      if (it == decisions_.end()) {
++        return PermissionStatus::ASK;
++      }
++      return it->second ? PermissionStatus::GRANTED : PermissionStatus::DENIED;
++    }
++    case blink::PermissionType::AUDIO_CAPTURE:
++    case blink::PermissionType::VIDEO_CAPTURE:
++      return PermissionStatus::ASK;
++    default:
++      return PermissionStatus::DENIED;
++  }
++}
++
++void ContentPermissionManager::RequestPermissionsFromCurrentDocument(
++    content::RenderFrameHost* render_frame_host,
++    const content::PermissionRequestDescription& request_description,
++    base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
++        callback) {
++  auto request = std::make_unique<Request>();
++  request->origin = SiteOrigin(render_frame_host);
++  request->web_contents =
++      content::WebContents::FromRenderFrameHost(render_frame_host)
++          ->GetWeakPtr();
++  request->callback = std::move(callback);
++  for (const auto& permission : request_description.permissions) {
++    blink::PermissionType type =
++        blink::PermissionDescriptorToPermissionType(permission);
++    PermissionStatus status = GetStatus(type, request->origin);
++    // The camera and the microphone are asked for with the media request
++    // (ContentWebState), not here.
++    if (render_frame_host->IsNestedWithinFencedFrame() ||
++        (status == PermissionStatus::ASK && !PromptMessageId(type))) {
++      status = PermissionStatus::DENIED;
++    }
++    request->types.push_back(type);
++    request->statuses.push_back(status);
++  }
++  const int request_id = next_request_id_++;
++  requests_[request_id] = std::move(request);
++  PromptNext(request_id);
++}
++
++void ContentPermissionManager::PromptNext(int request_id) {
++  auto it = requests_.find(request_id);
++  if (it == requests_.end()) {
++    return;
++  }
++  Request& request = *it->second;
++  auto ask = std::ranges::find(request.statuses, PermissionStatus::ASK);
++  content::WebContents* web_contents = request.web_contents.get();
++  UIViewController* presenter =
++      web_contents ? TopViewController(web_contents->GetNativeView().Get())
++                   : nil;
++  if (ask == request.statuses.end() || !presenter ||
++      web_contents->GetVisibility() != content::Visibility::VISIBLE) {
++    // Every permission is answered, or there is nowhere to ask: what is still
++    // unanswered is denied.
++    std::vector<content::PermissionResult> results;
++    for (PermissionStatus status : request.statuses) {
++      results.emplace_back(status == PermissionStatus::ASK
++                               ? PermissionStatus::DENIED
++                               : status);
++    }
++    auto callback = std::move(request.callback);
++    requests_.erase(it);
++    std::move(callback).Run(results);
++    return;
++  }
++
++  const blink::PermissionType type =
++      request.types[std::distance(request.statuses.begin(), ask)];
++  NSString* title = base::SysUTF16ToNSString(l10n_util::GetStringFUTF16(
++      *PromptMessageId(type),
++      url_formatter::FormatOriginForSecurityDisplay(
++          request.origin, url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS)));
++  UIAlertController* alert =
++      [UIAlertController alertControllerWithTitle:title
++                                          message:nil
++                                   preferredStyle:UIAlertControllerStyleAlert];
++  base::WeakPtr<ContentPermissionManager> weak_this =
++      weak_factory_.GetWeakPtr();
++  [alert addAction:[UIAlertAction
++                       actionWithTitle:l10n_util::GetNSString(
++                                           IDS_PERMISSION_DONT_ALLOW)
++                                 style:UIAlertActionStyleCancel
++                               handler:^(UIAlertAction* action) {
++                                 if (weak_this) {
++                                   weak_this->OnPromptAnswered(request_id, type,
++                                                               false);
++                                 }
++                               }]];
++  [alert addAction:[UIAlertAction
++                       actionWithTitle:l10n_util::GetNSString(
++                                           IDS_PERMISSION_ALLOW)
++                                 style:UIAlertActionStyleDefault
++                               handler:^(UIAlertAction* action) {
++                                 if (weak_this) {
++                                   weak_this->OnPromptAnswered(request_id, type,
++                                                               true);
++                                 }
++                               }]];
++  [presenter presentViewController:alert animated:YES completion:nil];
++}
++
++void ContentPermissionManager::OnPromptAnswered(int request_id,
++                                                blink::PermissionType type,
++                                                bool granted) {
++  auto it = requests_.find(request_id);
++  if (it == requests_.end()) {
++    return;
++  }
++  Request& request = *it->second;
++  decisions_[{type, request.origin}] = granted;
++  for (size_t i = 0; i < request.types.size(); ++i) {
++    if (request.types[i] == type &&
++        request.statuses[i] == PermissionStatus::ASK) {
++      request.statuses[i] =
++          granted ? PermissionStatus::GRANTED : PermissionStatus::DENIED;
++    }
++  }
++  PromptNext(request_id);
++}
++
++PermissionStatus ContentPermissionManager::GetPermissionStatus(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    const GURL& requesting_origin,
++    const GURL& embedding_origin) {
++  return GetStatus(
++      blink::PermissionDescriptorToPermissionType(permission_descriptor),
++      url::Origin::Create(embedding_origin));
++}
++
++content::PermissionResult
++ContentPermissionManager::GetPermissionResultForOriginWithoutContext(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    const url::Origin& requesting_origin,
++    const url::Origin& embedding_origin) {
++  return content::PermissionResult(GetStatus(
++      blink::PermissionDescriptorToPermissionType(permission_descriptor),
++      embedding_origin));
++}
++
++content::PermissionResult
++ContentPermissionManager::GetPermissionResultForCurrentDocument(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    content::RenderFrameHost* render_frame_host,
++    bool should_include_device_status) {
++  if (render_frame_host->IsNestedWithinFencedFrame()) {
++    return content::PermissionResult(PermissionStatus::DENIED);
++  }
++  return content::PermissionResult(GetStatus(
++      blink::PermissionDescriptorToPermissionType(permission_descriptor),
++      SiteOrigin(render_frame_host)));
++}
++
++content::PermissionResult
++ContentPermissionManager::GetPermissionResultForWorker(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    content::RenderProcessHost* render_process_host,
++    const GURL& worker_origin) {
++  return content::PermissionResult(GetStatus(
++      blink::PermissionDescriptorToPermissionType(permission_descriptor),
++      url::Origin::Create(worker_origin)));
++}
++
++content::PermissionResult
++ContentPermissionManager::GetPermissionResultForEmbeddedRequester(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    content::RenderFrameHost* render_frame_host,
++    const url::Origin& requesting_origin) {
++  if (render_frame_host->IsNestedWithinFencedFrame()) {
++    return content::PermissionResult(PermissionStatus::DENIED);
++  }
++  return content::PermissionResult(GetStatus(
++      blink::PermissionDescriptorToPermissionType(permission_descriptor),
++      SiteOrigin(render_frame_host)));
++}
++
++void ContentPermissionManager::ResetPermission(
++    blink::PermissionType permission,
++    const GURL& requesting_origin,
++    const GURL& embedding_origin) {
++  decisions_.erase({permission, url::Origin::Create(embedding_origin)});
++}
++
++}  // namespace web
+diff --git a/ios/web/content/init/BUILD.gn b/ios/web/content/init/BUILD.gn
+index a07b69d29f83b92077103b2aab9b52b90ec1ae6e..2b9a1dd78bf80500764f0c8e4fb94fb5ece8041b 100644
+--- a/ios/web/content/init/BUILD.gn
++++ b/ios/web/content/init/BUILD.gn
+@@ -42,6 +42,7 @@ source_set("init") {
+     "//ios/web/content/common:non_code_constants",
+     "//ios/web/public",
+     "//ios/web/public/init",
++    "//services/device/public/cpp/geolocation",
+     "//third_party/blink/public/common",
+     "//ui/base",
+     "//ui/native_theme",
+diff --git a/ios/web/content/init/DEPS b/ios/web/content/init/DEPS
+index af2bb60d032e314d4a651d6873923c5d6696a4fd..e9408b8d3e459b0b48d86d859fe920448acfb892 100644
+--- a/ios/web/content/init/DEPS
++++ b/ios/web/content/init/DEPS
+@@ -9,6 +9,7 @@ include_rules = [
+   "+content/public/browser",
+   "+content/public/common",
+   "+content/public/renderer",
++  "+services/device/public/cpp/geolocation",
+   "+third_party/blink/public/common/switches.h",
+   "+third_party/blink/public/common/web_preferences/web_preferences.h",
+   "+third_party/blink/public/platform/web_url_error.h",
+diff --git a/ios/web/content/init/ios_browser_main_parts.h b/ios/web/content/init/ios_browser_main_parts.h
+index 123cd333438b181a7a6911ecfffefe6433953aa2..575f218e59d45f5ed68bc867717f8c773e1f76d8 100644
+--- a/ios/web/content/init/ios_browser_main_parts.h
++++ b/ios/web/content/init/ios_browser_main_parts.h
+@@ -12,6 +12,10 @@
+ #error File can only be included when USE_BLINK is true
+ #endif
+ 
++namespace device {
++class GeolocationSystemPermissionManager;
++}  // namespace device
++
+ namespace web {
+ 
+ class WebMainParts;
+@@ -32,6 +36,12 @@ class IOSBrowserMainParts : public content::BrowserMainParts {
+   int PostCreateThreads() override;
+   int PreMainMessageLoopRun() override;
+ 
++  // [ios-blink-sideload] The manager of the app's location permission, which
++  // the device service needs to get the location from Core Location (as in
++  // content_shell on iOS). Created when first asked for.
++  static device::GeolocationSystemPermissionManager*
++  GetGeolocationSystemPermissionManager();
++
+  private:
+   std::unique_ptr<web::WebMainParts> parts_;
+ };
+diff --git a/ios/web/content/init/ios_browser_main_parts.mm b/ios/web/content/init/ios_browser_main_parts.mm
+index d174078e08c4963cd2c27e7a53d3d8f7a411de4e..fe48b1f3ae28212599d707b1d177c530df95df29 100644
+--- a/ios/web/content/init/ios_browser_main_parts.mm
++++ b/ios/web/content/init/ios_browser_main_parts.mm
+@@ -7,6 +7,7 @@
+ #import "content/public/common/result_codes.h"
+ #import "ios/web/public/init/web_main_parts.h"
+ #import "ios/web/public/web_client.h"
++#import "services/device/public/cpp/geolocation/system_geolocation_source_apple.h"
+ 
+ namespace web {
+ 
+@@ -45,4 +46,15 @@
+   return 0;
+ }
+ 
++// static
++device::GeolocationSystemPermissionManager*
++IOSBrowserMainParts::GetGeolocationSystemPermissionManager() {
++  if (!device::GeolocationSystemPermissionManager::GetInstance()) {
++    device::GeolocationSystemPermissionManager::SetInstance(
++        device::SystemGeolocationSourceApple::
++            CreateGeolocationSystemPermissionManager());
++  }
++  return device::GeolocationSystemPermissionManager::GetInstance();
++}
++
+ }  // namespace web
+diff --git a/ios/web/content/init/ios_content_browser_client.cc b/ios/web/content/init/ios_content_browser_client.cc
+index cd149998dc3a2a0bb18b427f32d38851e24f81de..6af713abb931a4e7eb381e7bc01dad466d9dd195 100644
+--- a/ios/web/content/init/ios_content_browser_client.cc
++++ b/ios/web/content/init/ios_content_browser_client.cc
+@@ -91,6 +91,13 @@ blink::UserAgentMetadata IOSContentBrowserClient::GetUserAgentMetadata() {
+   return embedder_support::GetUserAgentMetadata();
+ }
+ 
++device::GeolocationSystemPermissionManager*
++IOSContentBrowserClient::GetGeolocationSystemPermissionManager() {
++  // [ios-blink-sideload] Without it, the device service CHECK-failed as soon as
++  // a page asked for the location.
++  return IOSBrowserMainParts::GetGeolocationSystemPermissionManager();
++}
++
+ std::unique_ptr<content::WebContentsViewDelegate>
+ IOSContentBrowserClient::GetWebContentsViewDelegate(
+     content::WebContents* web_contents) {
+diff --git a/ios/web/content/init/ios_content_browser_client.h b/ios/web/content/init/ios_content_browser_client.h
+index 80c2c1008821b97ab2ef8c4c495de1fc4c9ed300..48875befa85e43bd18357cac86e7752f87a01aaa 100644
+--- a/ios/web/content/init/ios_content_browser_client.h
++++ b/ios/web/content/init/ios_content_browser_client.h
+@@ -24,6 +24,8 @@ class IOSContentBrowserClient : public content::ContentBrowserClient {
+   std::string GetProduct() override;
+   std::string GetUserAgent() override;
+   blink::UserAgentMetadata GetUserAgentMetadata() override;
++  device::GeolocationSystemPermissionManager*
++  GetGeolocationSystemPermissionManager() override;
+   std::unique_ptr<content::WebContentsViewDelegate> GetWebContentsViewDelegate(
+       content::WebContents* web_contents) override;
+   content::GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
+diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
+index 77cf532344460bb65c20594eaad510dc5ba7cf8e..bba29edf247ffa864f6f3248c1e766cdefac130a 100644
+--- a/ios/web/content/web_state/content_web_state.h
++++ b/ios/web/content/web_state/content_web_state.h
+@@ -178,6 +178,7 @@ class ContentWebState : public WebState,
+       content::NavigationHandle* navigation_handle) override;
+   void DidFinishNavigation(
+       content::NavigationHandle* navigation_handle) override;
++  void PrimaryPageChanged(content::Page& page) override;
+   void DidStartLoading() override;
+   void DidStopLoading() override;
+   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
+@@ -241,6 +242,13 @@ class ContentWebState : public WebState,
+ 
+   content::JavaScriptDialogManager* GetJavaScriptDialogManager(
+       content::WebContents* source) override;
++  void RequestMediaAccessPermission(
++      content::WebContents* web_contents,
++      const content::MediaStreamRequest& request,
++      content::MediaResponseCallback callback) override;
++  bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
++                                  const url::Origin& security_origin,
++                                  blink::mojom::MediaStreamType type) override;
+ 
+  private:
+   // Store serialized state.
+@@ -275,6 +283,10 @@ class ContentWebState : public WebState,
+   bool top_control_scroll_in_progress_ = false;
+   bool cached_shrink_controls_ = false;
+   bool created_with_opener_ = false;
++  // [ios-blink-sideload] Whether the page may use the camera and the
++  // microphone, once asked. Kept until another page shows, as WebKit does.
++  std::optional<bool> camera_allowed_;
++  std::optional<bool> microphone_allowed_;
+   id keyboard_showing_observer_;
+   id keyboard_hiding_observer_;
+   int keyboard_height_ = 0;
+diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
+index 37338cbeb969522febe898f96c62ceecf57306b8..01c54b4d59ad11f0943558d7a82a51b6df4052ae 100644
+--- a/ios/web/content/web_state/content_web_state.mm
++++ b/ios/web/content/web_state/content_web_state.mm
+@@ -4,6 +4,9 @@
+ 
+ #import "ios/web/content/web_state/content_web_state.h"
+ 
++#import <algorithm>
++#import <memory>
++
+ #import "base/apple/foundation_util.h"
+ #import "base/functional/callback_helpers.h"
+ #import "base/notimplemented.h"
+@@ -14,6 +17,7 @@
+ #import "components/javascript_dialogs/tab_modal_dialog_manager.h"
+ #import "content/public/browser/file_select_listener.h"
+ #import "content/public/browser/javascript_dialog_manager.h"
++#import "content/public/browser/media_capture_devices.h"
+ #import "content/public/browser/navigation_entry.h"
+ #import "content/public/browser/visibility.h"
+ #import "content/public/browser/web_contents.h"
+@@ -29,6 +33,7 @@
+ #import "ios/web/public/navigation/navigation_item.h"
+ #import "ios/web/public/navigation/navigation_util.h"
+ #import "ios/web/public/navigation/web_state_policy_decider.h"
++#import "ios/web/public/permissions/permissions.h"
+ #import "ios/web/public/session/proto/metadata.pb.h"
+ #import "ios/web/public/session/proto/proto_util.h"
+ #import "ios/web/public/session/proto/storage.pb.h"
+@@ -38,8 +43,10 @@
+ #import "net/cert/x509_util_apple.h"
+ #import "services/network/public/mojom/referrer_policy.mojom-shared.h"
+ #import "skia/ext/skia_utils_ios.h"
++#import "third_party/blink/public/common/mediastream/media_stream_request.h"
+ #import "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #import "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
++#import "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+ #import "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
+ #import "ui/display/display.h"
+ #import "ui/display/screen.h"
+@@ -695,6 +702,11 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+   }
+ }
+ 
++void ContentWebState::PrimaryPageChanged(content::Page& page) {
++  camera_allowed_.reset();
++  microphone_allowed_.reset();
++}
++
+ void ContentWebState::DidStartLoading() {
+   for (auto& observer : observers_) {
+     observer.DidStartLoading(this);
+@@ -942,4 +954,129 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+   return dialog;
+ }
+ 
++namespace {
++
++// The capture device the page asked for, or the first one.
++const blink::MediaStreamDevice* GetRequestedDeviceOrDefault(
++    const blink::MediaStreamDevices& devices,
++    const std::vector<std::string>& requested_device_ids) {
++  if (!requested_device_ids.empty() && !requested_device_ids.front().empty()) {
++    auto it = std::ranges::find(devices, requested_device_ids.front(),
++                                &blink::MediaStreamDevice::id);
++    return it != devices.end() ? &*it : nullptr;
++  }
++  return devices.empty() ? nullptr : &devices.front();
++}
++
++void RespondToMediaAccessRequest(const content::MediaStreamRequest& request,
++                                 content::MediaResponseCallback callback,
++                                 bool audio_allowed,
++                                 bool video_allowed) {
++  if (!audio_allowed && !video_allowed) {
++    std::move(callback).Run(
++        blink::mojom::StreamDevicesSet(),
++        blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED, nullptr);
++    return;
++  }
++  content::MediaCaptureDevices* capture_devices =
++      content::MediaCaptureDevices::GetInstance();
++  blink::mojom::StreamDevicesSet stream_devices_set;
++  stream_devices_set.stream_devices.emplace_back(
++      blink::mojom::StreamDevices::New());
++  blink::mojom::StreamDevices& devices = *stream_devices_set.stream_devices[0];
++  if (audio_allowed) {
++    if (const blink::MediaStreamDevice* device = GetRequestedDeviceOrDefault(
++            capture_devices->GetAudioCaptureDevices(),
++            request.requested_audio_device_ids)) {
++      devices.audio_device = *device;
++    }
++  }
++  if (video_allowed) {
++    if (const blink::MediaStreamDevice* device = GetRequestedDeviceOrDefault(
++            capture_devices->GetVideoCaptureDevices(),
++            request.requested_video_device_ids)) {
++      devices.video_device = *device;
++    }
++  }
++  if (!devices.audio_device && !devices.video_device) {
++    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
++                            blink::mojom::MediaStreamRequestResult::NO_HARDWARE,
++                            nullptr);
++    return;
++  }
++  std::move(callback).Run(stream_devices_set,
++                          blink::mojom::MediaStreamRequestResult::OK, nullptr);
++}
++
++}  // namespace
++
++void ContentWebState::RequestMediaAccessPermission(
++    content::WebContents* web_contents,
++    const content::MediaStreamRequest& request,
++    content::MediaResponseCallback callback) {
++  // [ios-blink-sideload] Ask for the camera and the microphone with the prompt
++  // the embedder shows for WKWebView
++  // (WebStateDelegate::HandlePermissionsDecisionRequest()); content denied
++  // them. The answer holds until another page shows, as in WebKit.
++  const bool audio =
++      request.audio_type == blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE;
++  const bool video =
++      request.video_type == blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE;
++  if (!audio && !video) {
++    std::move(callback).Run(
++        blink::mojom::StreamDevicesSet(),
++        blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED, nullptr);
++    return;
++  }
++  // What is not requested counts as answered: not allowed.
++  const std::optional<bool> audio_decision =
++      audio ? microphone_allowed_ : std::optional<bool>(false);
++  const std::optional<bool> video_decision =
++      video ? camera_allowed_ : std::optional<bool>(false);
++  if ((audio_decision && video_decision) || !delegate_) {
++    RespondToMediaAccessRequest(request, std::move(callback),
++                                audio_decision.value_or(false),
++                                video_decision.value_or(false));
++    return;
++  }
++
++  NSMutableArray<NSNumber*>* asked = [NSMutableArray array];
++  if (!video_decision) {
++    [asked addObject:@(PermissionCamera)];
++  }
++  if (!audio_decision) {
++    [asked addObject:@(PermissionMicrophone)];
++  }
++  auto shared_callback =
++      std::make_shared<content::MediaResponseCallback>(std::move(callback));
++  base::WeakPtr<ContentWebState> weak_this = weak_factory_.GetWeakPtr();
++  const content::MediaStreamRequest request_copy = request;
++  delegate_->HandlePermissionsDecisionRequest(
++      this, asked, ^(PermissionDecision decision) {
++        const bool granted = decision == PermissionDecisionGrant;
++        if (weak_this) {
++          if (!video_decision) {
++            weak_this->camera_allowed_ = granted;
++          }
++          if (!audio_decision) {
++            weak_this->microphone_allowed_ = granted;
++          }
++        }
++        RespondToMediaAccessRequest(request_copy, std::move(*shared_callback),
++                                    audio_decision.value_or(granted),
++                                    video_decision.value_or(granted));
++      });
++}
++
++bool ContentWebState::CheckMediaAccessPermission(
++    content::RenderFrameHost* render_frame_host,
++    const url::Origin& security_origin,
++    blink::mojom::MediaStreamType type) {
++  // [ios-blink-sideload] See RequestMediaAccessPermission().
++  return (type == blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE
++              ? microphone_allowed_
++              : camera_allowed_)
++      .value_or(false);
++}
++
+ }  // namespace web
+-- 
+2.54.0 (Apple Git-157)
+

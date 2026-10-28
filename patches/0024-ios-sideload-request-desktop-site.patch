@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 28 Oct 2026 23:28:51 +0800
+Subject: [PATCH] iOS sideload: request desktop site
+
+Chrome's "Request Desktop Site" did nothing: it calls
+NavigationManager::ReloadWithUserAgentType(), which was
+NOTIMPLEMENTED() for Blink, and items always said they were mobile.
+
+Do it as Chrome on Android does
+(NavigationControllerAndroid::SetUseDesktopUserAgent()): the first time,
+give the WebContents a desktop user agent override (Chrome on the
+Mac's, with client hints to match, where Android uses Linux's); mark
+the last committed entry as overriding the user agent and load its
+original request URL again. Links and addresses opened from it keep the
+override (content inherits it), until Request Mobile Site. An item's
+user agent type is now its entry's override flag, so the menu offers
+the other mode.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator, with a
+test page that reports the User-Agent header, navigator.userAgent and
+navigator.userAgentData: Request Desktop Site reloads the page with
+Chrome on the Mac's user agent in both, mobile false and platform macOS
+in the client hints; reloading and following a link in the tab keep
+it; the menu then offers Request Mobile Site, which reloads with the
+iPhone user agent again. navigator.platform stays "iPhone", as it stays
+"Linux armv81" on Android (the override does not change it).
+
+diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
+index 0af63b2bad3c7fc13cd7d1e74f653a88d5b41187..56750acb7f278013c2e560186ae344cccaddd8c2 100644
+--- a/ios/web/content/BUILD.gn
++++ b/ios/web/content/BUILD.gn
+@@ -53,6 +53,7 @@ source_set("content") {
+     "//base",
+     "//build:blink_buildflags",
+     "//components/download/public/common:public",
++    "//components/embedder_support:user_agent",
+     "//components/embedder_support/ios:web_contents_delegate",
+     "//components/javascript_dialogs",
+     "//components/js_injection/browser",
+diff --git a/ios/web/content/DEPS b/ios/web/content/DEPS
+index d4439ad3bc2f525d0d2bfc5d27f0d8715468e847..fc5fac27a1318d9a2ee07492218f6dc32f06a60e 100644
+--- a/ios/web/content/DEPS
++++ b/ios/web/content/DEPS
+@@ -16,6 +16,10 @@ specific_include_rules = {
+     "+third_party/blink/public/mojom/page/page_visibility_state.mojom.h",
+     "+skia/ext/skia_utils_ios.h",
+   ],
++  "content_navigation_manager\\.mm": [
++    "+components/embedder_support/user_agent_utils.h",
++    "+third_party/blink/public/common/user_agent/user_agent_metadata.h",
++  ],
+   "content_web_state_unittest\\.mm": [
+     "+content/public/test/browser_task_environment.h",
+   ],
+diff --git a/ios/web/content/navigation/content_navigation_item.h b/ios/web/content/navigation/content_navigation_item.h
+index c53d305c08d6fffb42a7849006882f5c844a5e13..2e9446c5a7c2d0938b6f7ef2a5da322cfa6bcb6f 100644
+--- a/ios/web/content/navigation/content_navigation_item.h
++++ b/ios/web/content/navigation/content_navigation_item.h
+@@ -99,8 +99,6 @@ class ContentNavigationItem : public NavigationItem {
+   mutable FaviconStatus favicon_status_;
+   mutable SSLStatus ssl_status_;
+   NSData* security_scoped_file_resource_ = nil;
+-
+-  UserAgentType user_agent_type_ = UserAgentType::MOBILE;
+ };
+ 
+ }  // namespace web
+diff --git a/ios/web/content/navigation/content_navigation_item.mm b/ios/web/content/navigation/content_navigation_item.mm
+index 3adf25c2ae10ac4dd804e8486ae7ba4ef0fef1a8..968cc06c3029ba96c74adc955b8e37ccb1404af7 100644
+--- a/ios/web/content/navigation/content_navigation_item.mm
++++ b/ios/web/content/navigation/content_navigation_item.mm
+@@ -191,11 +191,14 @@ ReferrerPolicy FromContentReferrerPolicy(
+ }
+ 
+ void ContentNavigationItem::SetUserAgentType(UserAgentType type) {
+-  user_agent_type_ = type;
++  // [ios-blink-sideload] Desktop is content's user agent override (see
++  // ContentNavigationManager::ReloadWithUserAgentType()).
++  entry_->SetIsOverridingUserAgent(type == UserAgentType::DESKTOP);
+ }
+ 
+ UserAgentType ContentNavigationItem::GetUserAgentType() const {
+-  return user_agent_type_;
++  return entry_->GetIsOverridingUserAgent() ? UserAgentType::DESKTOP
++                                            : UserAgentType::MOBILE;
+ }
+ 
+ void ContentNavigationItem::SetSecurityScopedFileResource(NSData* data) {
+diff --git a/ios/web/content/navigation/content_navigation_manager.mm b/ios/web/content/navigation/content_navigation_manager.mm
+index 53606ced1e67201f2a88082ae65d9109235fd698..651baf9c2799e1626bfa921ff76a615bc71f85a4 100644
+--- a/ios/web/content/navigation/content_navigation_manager.mm
++++ b/ios/web/content/navigation/content_navigation_manager.mm
+@@ -11,9 +11,11 @@
+ #import "base/apple/foundation_util.h"
+ #import "base/notimplemented.h"
+ #import "base/strings/sys_string_conversions.h"
++#import "components/embedder_support/user_agent_utils.h"
+ #import "content/public/browser/navigation_controller.h"
+ #import "content/public/browser/navigation_entry.h"
+ #import "content/public/browser/navigation_handle.h"
++#import "content/public/browser/web_contents.h"
+ #import "ios/web/content/navigation/content_navigation_item.h"
+ #import "ios/web/content/web_state/content_web_state.h"
+ #import "ios/web/navigation/navigation_context_impl.h"
+@@ -22,6 +24,7 @@
+ #import "ios/web/public/web_state_observer.h"
+ #import "net/http/http_request_headers.h"
+ #import "net/http/http_util.h"
++#import "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ 
+ namespace web {
+ 
+@@ -52,6 +55,29 @@
+   }
+ }
+ 
++// [ios-blink-sideload] Chrome on the Mac's user agent, for Request Desktop
++// Site (Chrome on Android uses Linux's), with client hints to match.
++blink::UserAgentOverride DesktopUserAgentOverride() {
++  const blink::UserAgentMetadata metadata =
++      embedder_support::GetUserAgentMetadata();
++  blink::UserAgentOverride ua_override;
++  ua_override.ua_string_override =
++      embedder_support::BuildUserAgentFromOSAndProduct(
++          "Macintosh; Intel Mac OS X 10_15_7",
++          embedder_support::GetProductAndVersion());
++  ua_override.ua_metadata_override = metadata;
++  ua_override.ua_metadata_override->platform = "macOS";
++  ua_override.ua_metadata_override->platform_version = std::string();
++  ua_override.ua_metadata_override->model = std::string();
++  ua_override.ua_metadata_override->mobile = false;
++  ua_override.ua_metadata_override->form_factors =
++      embedder_support::GetFormFactorsClientHint(metadata, /*is_mobile=*/false);
++  ua_override.ua_metadata_override->architecture = "arm";
++  ua_override.ua_metadata_override->bitness = "64";
++  ua_override.ua_metadata_override->wow64 = false;
++  return ua_override;
++}
++
+ }  // namespace
+ 
+ ContentNavigationManager::ContentNavigationManager(
+@@ -193,8 +219,23 @@
+ 
+ void ContentNavigationManager::ReloadWithUserAgentType(
+     UserAgentType user_agent_type) {
+-  // TODO(crbug.com/40257932)
+-  NOTIMPLEMENTED();
++  // [ios-blink-sideload] Request Desktop Site as Chrome on Android does it
++  // (NavigationControllerAndroid::SetUseDesktopUserAgent()): the current entry
++  // overrides the user agent, and its original request URL loads again. Pages
++  // opened from it, by link or address, keep the override.
++  content::NavigationEntry* entry = controller_->GetLastCommittedEntry();
++  if (!entry) {
++    return;
++  }
++  const bool desktop = user_agent_type == UserAgentType::DESKTOP;
++  content::WebContents* web_contents = web_state_->GetWebContents();
++  if (desktop &&
++      web_contents->GetUserAgentOverride().ua_string_override.empty()) {
++    web_contents->SetUserAgentOverride(DesktopUserAgentOverride(),
++                                       /*override_in_new_tabs=*/false);
++  }
++  entry->SetIsOverridingUserAgent(desktop);
++  controller_->LoadOriginalRequestURL();
+ }
+ 
+ std::vector<NavigationItem*> ContentNavigationManager::GetBackwardItems()
+-- 
+2.54.0 (Apple Git-157)
+

@@ -2,7 +2,7 @@
 
 写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
 
-**状态：** 0001–0023 和 V8 补丁 0201 在模拟器和真机两种配置下都编译通过，模拟器里运行、测试过（2026-10-28，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上验证过 0001–0004（用户测试：网页能显示）；0005 以后还没在真机上测过。
+**状态：** 0001–0026 和 V8 补丁 0201 在模拟器和真机两种配置下都编译通过，模拟器里运行、测试过（2026-10-28，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上验证过 0001–0004（用户测试：网页能显示）；0005 以后还没在真机上测过。
 
 | 补丁 | 改动文件 | 作用 |
 |---|---|---|
@@ -29,6 +29,9 @@
 | `0021-ios-sideload-dark-mode.patch` | `ui/native_theme/os_settings_provider{,_ios}.{h,mm,cc}`、`ui/native_theme/BUILD.gn`、`ios/web/content/init/ios_content_browser_client.{h,cc}`、`ios/web/content/init/{BUILD.gn,DEPS}` | 网页跟随系统的深色模式（`prefers-color-scheme`），切换系统外观时立刻生效 |
 | `0022-ios-sideload-find-in-page.patch` | `ios/web/content/web_state/{content_web_state,crc_find_in_page_controller}.{h,mm}`、`ios/web/content/{BUILD.gn,DEPS}` | 页内查找：Blink 版网页视图用上和 Safari 一样的系统查找栏，由 content 的 `WebContents::Find` 来查，显示第几个 / 共几个，新搜索从第一个匹配开始 |
 | `0023-ios-sideload-system-selection-colors.patch` | `content/browser/renderer_host/ios_extended_text_input_traits.mm`、`third_party/blink/renderer/core/layout/layout_theme_ios.{h,mm}`、`third_party/blink/renderer/core/editing/caret_display_item_client.cc`、`third_party/blink/renderer/core/frame/local_frame_view.cc` | 选区拖柄、选区和光标用系统蓝，和 Safari 一样：选区 20% 不透明、字保持原色，光标 2 pt 宽 |
+| `0024-ios-sideload-request-desktop-site.patch` | `ios/web/content/navigation/content_navigation_{manager,item}.{h,mm}`、`ios/web/content/{BUILD.gn,DEPS}` | 请求桌面版网站：换成 Mac 版 Chrome 的 UA（含客户端提示）并按原始网址重新加载，标签页里之后的页面沿用，菜单在桌面版 / 移动版之间切换 |
+| `0025-ios-sideload-edit-menu-for-caret.patch` | `content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.{h,mm}` | 只有光标时也能弹系统编辑菜单，空输入框能粘贴：保持选区显示激活、系统光标换成不画东西的视图，已聚焦的输入框再点一下或长按弹出"粘贴" |
+| `0026-ios-sideload-site-permissions.patch` | `ios/web/content/content_permission_manager.{h,mm}`（新）、`ios/web/content/content_browser_context.{h,mm}`、`ios/web/content/web_state/content_web_state.{h,mm}`、`ios/web/content/init/{ios_browser_main_parts,ios_content_browser_client}.*`、`ios/web/content/{BUILD.gn,DEPS}`、`ios/web/content/init/{BUILD.gn,DEPS}` | 网站权限：写剪贴板允许，定位、读剪贴板弹提示问用户，摄像头、麦克风用 Chrome 现成的提示；补上 Core Location 需要的系统定位权限管理器 |
 | `v8/0201-ios-sideload-fix-drumbrake-build.patch`（打在 `src/v8` 上） | `v8/src/wasm/interpreter/wasm-interpreter{,-runtime,-objects}.cc` | 让 V8 的 Wasm 解释器 DrumBrake 编得过：上游 CI 不编它，它没跟上 `TrustedManaged::raw()` 和 `TrustedCast<>` 的接口改动 |
 | `optional/0101-gl-init-failure-without-abort.patch` | `ui/gl/init/gl_factory_ios.mm` | GL 不可用时记日志、返回空，而不是直接崩溃（排错用） |
 | `optional/0102-disable-media-capture.patch` | `content/browser/renderer_host/media/media_devices_manager.cc`、`media/capture/video/apple/video_capture_device_avfoundation.mm` | 不枚举/不打开摄像头和麦克风（只在 iOS 27 上也因此崩溃时才用） |

@@ -88,6 +88,7 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 - 看系统调了自己的哪些方法：给自己写的 Objective-C 方法下断点（这类方法代码各不相同，不会被合并），断点挂 Python 回调，把参数和调用栈写进文件后接着运行（`breakpoint command add -F 模块.函数`），app 不用停下来（补丁 0022 就是这么看出系统查找栏每次搜索后会自己调一次"下一个"的）。回调里第一次求值（`frame.EvaluateExpression`）要等几十秒。
 - 对比颜色：`axe screenshot` 截图后直接读 PNG 的像素取色，和 Safari 同一页面、同一位置比（补丁 0023 就是这么对的选区、拖柄和光标颜色）。截图里的颜色和 UIKit 的取值差几个单位，比如系统蓝 `#0088FF` 截出来是 (0, 139, 255)，所以要两边都截图比，不要拿截图去比设计值。
 - 测键盘时测试页要同时监听 `scroll` 和 `visualViewport` 的 `resize`、`scroll`：键盘出现后滚动的是可视视口，`window` 不会收到 `scroll`（补丁 0020 测试时漏了这一点，误以为没滚动）。
+- 测网站权限：测试页把结果用 `fetch('/log?m=…')` 发回本地服务器，服务器把它打印出来，不用截图就能读结果（补丁 0026 就是这么测的）。定位先用 `xcrun simctl location <udid> set 31.2304,121.4737` 设一个模拟位置；iOS 的系统提示（定位、粘贴）也能按文字点（`describe-ui` 里有）。模拟器没有摄像头，content 找不到设备时直接报 `NotFoundError`、不会来问权限；启动时加 `--use-fake-device-for-media-stream`（`xcrun simctl launch <udid> <bundle id> --use-fake-device-for-media-stream`）就有一个虚拟摄像头。
 - 切换深色/浅色：`xcrun simctl ui <udid> appearance dark`（或 `light`），网页开着也会立刻收到变化。
 - 模拟器里的 Chromium 走 Mac 的系统代理（补丁 0009），系统代理开着就能打开 Google；需要对照时，`xcrun simctl openurl` 打开 http(s) 网址会用模拟器里的 Safari。
 

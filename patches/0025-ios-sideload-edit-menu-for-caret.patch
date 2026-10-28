@@ -1,0 +1,234 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 28 Oct 2026 23:28:54 +0800
+Subject: [PATCH] iOS sideload: edit menu for a caret, to paste into empty
+ fields
+
+The system edit menu only showed for selected text: with only a caret,
+the selection display was deactivated and the system interaction's copy
+of the selection was not refreshed, so presentEditMenuForSelection did
+nothing, and an empty text field could not be pasted into.
+
+Keep the selection display active for a caret in a text field, as
+WebKit does, and refresh the system's copy of the selection when the
+caret moves (not while the keyboard composes marked text). The system
+cursor is replaced by one that draws nothing, since Blink draws the
+caret. Select All is only offered when the field has text, as in
+Safari.
+
+A tap that leaves the caret where it was, in a field that had it
+before the tap (anywhere in an empty field, or on the caret), shows the
+menu too, as in Safari: the renderer handles the tap first, and the
+menu waits 150 ms for a caret update that would cancel it.
+
+Status: verified at Chromium 4558926c in the iOS 27 simulator, against
+Safari on the same page: in an empty input, the first tap focuses it
+and the second shows Paste, as does a long press; Paste inserts the
+clipboard text (the page gets the paste and input events). In a field
+with text, a tap that moves the caret shows nothing and a tap on the
+caret shows Paste / Select / Select All. There is one caret (Blink's),
+Pinyin composition and committing a candidate work as before, and long-
+pressing page text still selects a word with handles and its menu.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index 5a1499242744849a21071ae6c5d4c29f359afb78..c5a50b833b97de2978e37ae5769e524f001a0520 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -688,6 +688,11 @@ bool IsTesting() {
+ 
+   blink::WebGestureEvent web_gesture =
+       ui::CreateWebGestureEventFromGestureEventData(gesture);
++#if !BUILDFLAG(IS_IOS_TVOS)
++  if (gesture.type() == ui::EventType::kGestureTap) {
++    [ui_view_->view_ willSendTap];
++  }
++#endif
+   SendGestureEvent(web_gesture);
+ }
+ 
+@@ -886,8 +891,8 @@ bool IsTesting() {
+     handleViews[1].subviews[1].layer.transform =
+         CATransform3DMakeScale(shrink, shrink, 1);
+   } else {
+-    [[ui_view_->view_ textInteraction] textSelectionDisplayInteraction]
+-        .activated = NO;
++    // [ios-blink-sideload] -selectionDidClear deactivates the selection
++    // display, except for a caret in a text field.
+     [ui_view_->view_ selectionDidClear];
+   }
+ #endif
+@@ -955,6 +960,11 @@ bool IsTesting() {
+ #endif
+       break;
+     }
++#if !BUILDFLAG(IS_IOS_TVOS)
++    case blink::WebInputEvent::Type::kGestureTap:
++      [ui_view_->view_ tapDidEnd];
++      break;
++#endif
+     default:
+       break;
+   }
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+index a78ccdbce7ef8b753188879a91ffd7ee8350c8e7..5bbba9564a38be712d91c82b1ec9e865f24895c7 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.h
+@@ -48,6 +48,10 @@ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+   gfx::Point _selectionDragBase;
+   CGFloat _selectionDragBaseTop;
+   CGFloat _selectionDragBaseBottom;
++  // [ios-blink-sideload] The text field with a caret when a tap was sent, and
++  // whether the edit menu waits to show for that tap.
++  int32_t _caretTapNodeId;
++  BOOL _caretTapPending;
+ }
+ 
+ - (instancetype)initWithWidget:
+@@ -68,6 +72,10 @@ inline constexpr CGFloat kInputAccessoryToolbarBottomMargin = 8;
+ - (void)selectionDidClear;
+ // [ios-blink-sideload] Called when the selection's bounds change.
+ - (void)selectionBoundsDidChange;
++// [ios-blink-sideload] Called before a tap is sent to the renderer, and when
++// the renderer has handled it.
++- (void)willSendTap;
++- (void)tapDidEnd;
+ - (void)updateView:(UIScrollView*)view;
+ - (void)removeView;
+ @end
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index 6fcd8e1991dfabfc84e20edfeebabed0a7745f90..f77e728317376ea7b7138c849d88b97f798f992e 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -144,6 +144,21 @@ - (CGRect)rect {
+ }
+ @end
+ 
++// [ios-blink-sideload] The system text interaction's cursor, which shows
++// nothing: Blink draws the caret. The interaction stays active for a caret in a
++// text field (-updateCaretInteraction), and its own cursor would be a second
++// caret next to Blink's.
++@interface BEHiddenTextCursorView : UIView <UITextCursorView>
++@end
++
++@implementation BEHiddenTextCursorView
++@synthesize blinking = _blinking;
++
++- (void)resetBlinkAnimation {
++}
++
++@end
++
+ @implementation RenderWidgetUIView
+ @synthesize tokenizer;
+ 
+@@ -476,6 +491,7 @@ - (BOOL)setIsEditable:(BOOL)isEditable {
+ 
+   _isEditable = isEditable;
+   [self updateInputAssistantItem];
++  [self updateCaretInteraction];
+   return YES;
+ }
+ 
+@@ -791,9 +807,10 @@ - (BOOL)canPerformAction:(SEL)action withSender:(nullable id)sender {
+     return hasSelection && _isEditable;
+   }
+   if (action == @selector(selectAll:)) {
+-    // Safari offers Select All for text fields only, but Command-A selects the
+-    // whole page.
+-    return _isEditable || [sender isKindOfClass:[UIKeyCommand class]];
++    // Safari offers Select All for text fields with text in them, but Command-A
++    // selects the whole page.
++    return (_isEditable && [self hasText]) ||
++           [sender isKindOfClass:[UIKeyCommand class]];
+   }
+   if (action == @selector(showWritingTools:)) {
+     // UIResponder's Writing Tools need text access this view lacks.
+@@ -1142,6 +1159,7 @@ - (void)selectionDidClear {
+   _editMenuHiddenForScroll = NO;
+   _presentEditMenuOnSelectionUpdate = NO;
+   [text_interaction_ dismissEditMenuForSelection];
++  [self updateCaretInteraction];
+ }
+ 
+ - (void)selectionBoundsDidChange {
+@@ -1152,6 +1170,7 @@ - (void)selectionBoundsDidChange {
+   // never showed, and the edit menu went to the top of the view. Refreshing
+   // dismisses the edit menu, so show it again.
+   if (![self selectedText].length) {
++    [self updateCaretInteraction];
+     return;
+   }
+   BOOL presentEditMenu = _editMenuVisible ||
+@@ -1162,6 +1181,69 @@ - (void)selectionBoundsDidChange {
+   }
+ }
+ 
++- (void)willSendTap {
++  // [ios-blink-sideload] As in Safari, tapping a text field that already has
++  // the caret shows the edit menu when the tap leaves the caret where it was:
++  // anywhere in an empty field, or on the caret.
++  const ui::mojom::TextInputState* state = [self editState];
++  _caretTapNodeId = _isEditable && ![self selectedText].length && state
++                        ? state->node_id
++                        : 0;
++  _caretTapPending = NO;
++}
++
++- (void)tapDidEnd {
++  if (!_caretTapNodeId) {
++    return;
++  }
++  // The renderer has handled the tap, but the caret's new place may still be
++  // on its way: show the menu unless it moves (-updateCaretInteraction)
++  // shortly.
++  _caretTapPending = YES;
++  __weak RenderWidgetUIView* weakSelf = self;
++  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
++                 dispatch_get_main_queue(), ^{
++                   [weakSelf presentEditMenuForCaretTap];
++                 });
++}
++
++- (void)presentEditMenuForCaretTap {
++  if (!std::exchange(_caretTapPending, NO)) {
++    return;
++  }
++  const ui::mojom::TextInputState* state = [self editState];
++  if (_isEditable && ![self selectedText].length && state &&
++      state->node_id == _caretTapNodeId) {
++    [text_interaction_ presentEditMenuForSelection];
++  }
++}
++
++- (void)updateCaretInteraction {
++  // [ios-blink-sideload] Keep the system text interaction active for a caret in
++  // a text field, as WebKit does, so that its edit menu can show there, with
++  // Paste: it only showed for selected text, so an empty field could not be
++  // pasted into. Its own cursor shows nothing (BEHiddenTextCursorView).
++  // The caret moved: a tap that moved it shows no menu (-willSendTap).
++  _caretTapPending = NO;
++  if ([self selectedText].length) {
++    return;
++  }
++  UITextSelectionDisplayInteraction* display =
++      text_interaction_.textSelectionDisplayInteraction;
++  if (!_isEditable) {
++    display.activated = NO;
++    return;
++  }
++  if (![display.cursorView isKindOfClass:[BEHiddenTextCursorView class]]) {
++    display.cursorView = [[BEHiddenTextCursorView alloc] init];
++  }
++  display.activated = YES;
++  // Refreshing while the keyboard composes text would disturb the marked text.
++  if (![self hasMarkedText]) {
++    [text_interaction_ refreshKeyboardUI];
++  }
++}
++
+ - (nullable NSDictionary<NSAttributedStringKey, id>*)
+     textStylingAtPosition:(UITextPosition*)position
+               inDirection:(UITextStorageDirection)direction {
+-- 
+2.54.0 (Apple Git-157)
+

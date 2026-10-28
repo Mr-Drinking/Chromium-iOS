@@ -22,6 +22,9 @@
 0021-ios-sideload-dark-mode.patch
 0022-ios-sideload-find-in-page.patch
 0023-ios-sideload-system-selection-colors.patch
+0024-ios-sideload-request-desktop-site.patch
+0025-ios-sideload-edit-menu-for-caret.patch
+0026-ios-sideload-site-permissions.patch
 # V8 (src/v8, branched at the v8_revision in src/DEPS).
 src/v8:v8/0201-ios-sideload-fix-drumbrake-build.patch
 # Optional; applied only with --with-optional, or uncomment to make default.
