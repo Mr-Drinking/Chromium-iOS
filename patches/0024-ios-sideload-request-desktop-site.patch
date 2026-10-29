@@ -11,20 +11,37 @@ Do it as Chrome on Android does
 (NavigationControllerAndroid::SetUseDesktopUserAgent()): the first time,
 give the WebContents a desktop user agent override (Chrome on the
 Mac's, with client hints to match, where Android uses Linux's); mark
-the last committed entry as overriding the user agent and load its
-original request URL again. Links and addresses opened from it keep the
-override (content inherits it), until Request Mobile Site. An item's
-user agent type is now its entry's override flag, so the menu offers
-the other mode.
+the last committed entry as overriding the user agent, have content
+recompute the page's preferences, and load the entry's original request
+URL again. Content ignores the viewport meta tag on entries that
+override the user agent (WebContentsImpl::ComputeWebPreferences()), so
+the page lays out at a desktop width (980 px), zoomed out to fit, like
+a page without the tag. Without the recompute, which the commit doesn't
+do because the entry already has the flag, a responsive page kept its
+phone layout under the Mac user agent. Links and addresses opened from
+it keep the override (content inherits it), until Request Mobile Site.
+An item's user agent type is now its entry's override flag, so the menu
+offers the other mode, and a restored session keeps it (it was saved
+but not restored). navigator.platform says "MacIntel" in desktop mode,
+as in Safari, instead of "iPhone".
 
-Status: verified at Chromium 4558926c in the iOS 27 simulator, with a
-test page that reports the User-Agent header, navigator.userAgent and
-navigator.userAgentData: Request Desktop Site reloads the page with
-Chrome on the Mac's user agent in both, mobile false and platform macOS
-in the client hints; reloading and following a link in the tab keep
-it; the menu then offers Request Mobile Site, which reloads with the
-iPhone user agent again. navigator.platform stays "iPhone", as it stays
-"Linux armv81" on Android (the override does not change it).
+Safari on the iPhone keeps honoring the viewport tag in desktop mode (it
+changes only the user agent and navigator.platform), so responsive
+sites stay mobile there; this follows Chrome on Android instead.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator, with a
+test page that has a width=device-width viewport and reports the
+User-Agent header, navigator.userAgent, navigator.platform,
+navigator.userAgentData and the layout width: Request Desktop Site
+reloads it with Chrome on the Mac's user agent, mobile false and
+platform macOS in the client hints, navigator.platform MacIntel and a
+980 px layout zoomed out to 0.38; reloading, following a link and
+restarting the app keep it; the menu then offers Request Mobile Site,
+which goes back to the iPhone user agent and a 375 px layout. On real
+sites, github.com gets its desktop layout and bilibili.com goes from
+m.bilibili.com to the desktop www.bilibili.com. Pinch zoom on the
+zoomed-out page is not checked (the simulator tools here have no
+two-finger input).
 
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
 index 0af63b2bad3c7fc13cd7d1e74f653a88d5b41187..56750acb7f278013c2e560186ae344cccaddd8c2 100644
@@ -87,8 +104,31 @@ index 3adf25c2ae10ac4dd804e8486ae7ba4ef0fef1a8..968cc06c3029ba96c74adc955b8e37cc
  }
  
  void ContentNavigationItem::SetSecurityScopedFileResource(NSData* data) {
+diff --git a/ios/web/content/navigation/content_navigation_manager.h b/ios/web/content/navigation/content_navigation_manager.h
+index 4afc779055de2474d33634195e4728ed3b719bfc..6c5eeda0f02090a4a2e9ea339c86deb39d118f7f 100644
+--- a/ios/web/content/navigation/content_navigation_manager.h
++++ b/ios/web/content/navigation/content_navigation_manager.h
+@@ -15,12 +15,18 @@
+ 
+ namespace content {
+ class NavigationController;
++class WebContents;
+ }  // namespace content
+ 
+ namespace web {
+ 
+ class ContentWebState;
+ 
++// [ios-blink-sideload] Gives `web_contents` the user agent that Request Desktop
++// Site loads pages with (Chrome on the Mac's), unless it has an override
++// already. Only entries that override the user agent use it.
++void SetDesktopUserAgentOverride(content::WebContents* web_contents);
++
+ // ContentNavigationManager is a NavigationManager implementation that
+ // is built on top of //content's NavigationController.
+ class ContentNavigationManager : public NavigationManager {
 diff --git a/ios/web/content/navigation/content_navigation_manager.mm b/ios/web/content/navigation/content_navigation_manager.mm
-index 53606ced1e67201f2a88082ae65d9109235fd698..651baf9c2799e1626bfa921ff76a615bc71f85a4 100644
+index 53606ced1e67201f2a88082ae65d9109235fd698..edba81fded200e001e2da3fa970a1b04fc10c640 100644
 --- a/ios/web/content/navigation/content_navigation_manager.mm
 +++ b/ios/web/content/navigation/content_navigation_manager.mm
 @@ -11,9 +11,11 @@
@@ -111,7 +151,7 @@ index 53606ced1e67201f2a88082ae65d9109235fd698..651baf9c2799e1626bfa921ff76a615b
  
  namespace web {
  
-@@ -52,6 +55,29 @@
+@@ -52,8 +55,38 @@
    }
  }
  
@@ -140,8 +180,17 @@ index 53606ced1e67201f2a88082ae65d9109235fd698..651baf9c2799e1626bfa921ff76a615b
 +
  }  // namespace
  
++void SetDesktopUserAgentOverride(content::WebContents* web_contents) {
++  if (web_contents->GetUserAgentOverride().ua_string_override.empty()) {
++    web_contents->SetUserAgentOverride(DesktopUserAgentOverride(),
++                                       /*override_in_new_tabs=*/false);
++  }
++}
++
  ContentNavigationManager::ContentNavigationManager(
-@@ -193,8 +219,23 @@
+     ContentWebState* web_state,
+     BrowserState* browser_state,
+@@ -193,8 +226,28 @@
  
  void ContentNavigationManager::ReloadWithUserAgentType(
      UserAgentType user_agent_type) {
@@ -157,16 +206,95 @@ index 53606ced1e67201f2a88082ae65d9109235fd698..651baf9c2799e1626bfa921ff76a615b
 +  }
 +  const bool desktop = user_agent_type == UserAgentType::DESKTOP;
 +  content::WebContents* web_contents = web_state_->GetWebContents();
-+  if (desktop &&
-+      web_contents->GetUserAgentOverride().ua_string_override.empty()) {
-+    web_contents->SetUserAgentOverride(DesktopUserAgentOverride(),
-+                                       /*override_in_new_tabs=*/false);
++  if (desktop) {
++    SetDesktopUserAgentOverride(web_contents);
 +  }
 +  entry->SetIsOverridingUserAgent(desktop);
++  // Recompute the page's preferences, as Android does
++  // (WebContentsImpl::UpdateOverridingUserAgent()). Content ignores the
++  // viewport meta tag on entries that override the user agent, so in desktop
++  // mode a page lays out at a desktop width, zoomed out to fit, instead of at
++  // the phone's width. The commit doesn't do it: the entry already has the
++  // flag, so content sees no change.
++  web_contents->NotifyPreferencesChanged();
 +  controller_->LoadOriginalRequestURL();
  }
  
  std::vector<NavigationItem*> ContentNavigationManager::GetBackwardItems()
+diff --git a/ios/web/content/web_state/content_web_state_builder.mm b/ios/web/content/web_state/content_web_state_builder.mm
+index f6e8ba15b6c0d96110786e0e8697e6036b30045d..3b45d29de5f622cd7ec400b986b33b7b1218af7c 100644
+--- a/ios/web/content/web_state/content_web_state_builder.mm
++++ b/ios/web/content/web_state/content_web_state_builder.mm
+@@ -9,7 +9,9 @@
+ #import "content/public/browser/navigation_controller.h"
+ #import "content/public/browser/navigation_entry.h"
+ #import "content/public/browser/restore_type.h"
++#import "content/public/browser/web_contents.h"
+ #import "ios/web/content/content_browser_context.h"
++#import "ios/web/content/navigation/content_navigation_manager.h"
+ #import "ios/web/content/web_state/content_web_state.h"
+ #import "ios/web/navigation/proto_util.h"
+ #import "ios/web/public/navigation/navigation_item.h"
+@@ -31,6 +33,7 @@ void ExtractContentSessionStorage(ContentWebState* web_state,
+   web_state->SetHasOpener(storage.has_opener());
+   std::vector<std::unique_ptr<content::NavigationEntry>> items;
+   int last_committed_item_index = -1;
++  bool restores_desktop_site = false;
+ 
+   if (storage.has_navigation()) {
+     const proto::NavigationStorage& navigation = storage.navigation();
+@@ -67,6 +70,15 @@ void ExtractContentSessionStorage(ContentWebState* web_state,
+       new_entry->SetTitle(base::UTF8ToUTF16(item.title()));
+       new_entry->SetTransitionType(ui::PAGE_TRANSITION_RELOAD);
+ 
++      // [ios-blink-sideload] Keep Request Desktop Site across restarts: an
++      // item's user agent type is its entry's override flag (see
++      // ContentNavigationItem::SetUserAgentType()).
++      if (UserAgentTypeFromProto(item.user_agent()) ==
++          UserAgentType::DESKTOP) {
++        new_entry->SetIsOverridingUserAgent(true);
++        restores_desktop_site = true;
++      }
++
+       if (item.has_http_request_headers()) {
+         std::ostringstream buffer;
+         for (const proto::HttpHeaderStorage& header :
+@@ -105,8 +117,17 @@ void ExtractContentSessionStorage(ContentWebState* web_state,
+     }
+   }
+ 
++  // [ios-blink-sideload] The desktop entries need the desktop user agent, and
++  // the page's preferences (see ContentNavigationManager::
++  // ReloadWithUserAgentType()) must follow the restored entry.
++  if (restores_desktop_site) {
++    SetDesktopUserAgentOverride(web_state->GetWebContents());
++  }
+   controller.Restore(last_committed_item_index, content::RestoreType::kRestored,
+                      &items);
++  if (restores_desktop_site) {
++    web_state->GetWebContents()->NotifyPreferencesChanged();
++  }
+ }
+ 
+ void SerializeContentStorage(const ContentWebState* web_state,
+diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+index 83f427c5ec9b75cbf41935af9935f9fa293ea11c..c3385b940aee8e5a8dae9f91b1a89a11dbf334c2 100644
+--- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
++++ b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+@@ -73,6 +73,13 @@ String NavigatorBase::platform() const {
+   if (!RuntimeEnabledFeatures::ReduceUserAgentMinorVersionEnabled()) {
+     return NavigatorID::platform();
+   }
++#endif
++#if BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] Request Desktop Site gives the page a Mac's user agent
++  // and client hints; say Mac here too, as Safari does.
++  if (GetUserAgentMetadata().platform == "macOS") {
++    return "MacIntel";
++  }
+ #endif
+   return GetReducedNavigatorPlatform();
+ }
 -- 
 2.54.0 (Apple Git-157)
 

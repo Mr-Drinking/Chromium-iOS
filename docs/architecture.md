@@ -228,18 +228,22 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 
 模拟器里验证过（2026-10-28，和同一台模拟器里的 Safari 在同一测试页上取色对比）：长按选中一个词，选区在白底上是 (197, 232, 255)，拖柄是 (0, 139, 255)，和 Safari 的像素值一样；选中的红字保持红色；深色模式下白字保持白色，选区是叠在页面上的 20% 深色系统蓝（Blink 的深色底 #121212 上是 (0, 44, 67)，Safari 的黑底上是 (9, 29, 53)）；textarea 里的光标是系统蓝，6 像素（2 pt）宽，和 Safari 一样；设了 `caret-color: red` 的输入框光标仍然是红色。没改的：输入框聚焦时的焦点框还是 Blink 的橙色（Safari 是蓝色），textarea 的默认字体是等宽字体（Safari 是系统字体）。
 
-### 0024 请求桌面版网站（`ios/web/content/navigation/content_navigation_{manager,item}.mm`）
+### 0024 请求桌面版网站（`ios/web/content/navigation/content_navigation_{manager,item}.mm`、`web_state/content_web_state_builder.mm`、Blink 的 `navigator_base.cc`）
 
 用户 2026-10-28 在真机上发现"请求切换到桌面版网站"不起作用。Chrome 的菜单项调用 `NavigationManager::ReloadWithUserAgentType()`，Blink 版的实现是上游留下的 `NOTIMPLEMENTED()`，点了什么都不发生；条目的 `GetUserAgentType()` 也只是一个默认"移动版"的成员变量。
 
 补丁照安卓版 Chrome 的做法（`NavigationControllerAndroid::SetUseDesktopUserAgent()`）：
 
 - 第一次请求桌面版时，给 WebContents 设上桌面版的 UA 覆盖：Mac 版 Chrome 的 UA（`Macintosh; Intel Mac OS X 10_15_7`，安卓用的是 Linux 的），客户端提示也改成 `macOS`、非移动设备（照搬安卓的 `JNI_ContentUtils_SetUserAgentOverride`）。
-- 在最近一次提交的条目上 `SetIsOverridingUserAgent()`，再 `LoadOriginalRequestURL()` 按原始请求网址重新加载（手机版跳到 m. 站点的网站会回到原网址）。
+- 在最近一次提交的条目上 `SetIsOverridingUserAgent()`，让 content 重新计算网页设置（`NotifyPreferencesChanged()`；安卓在同一处调的 `UpdateOverridingUserAgent()` 做的就是这个），再 `LoadOriginalRequestURL()` 按原始请求网址重新加载（手机版跳到 m. 站点的网站会回到原网址）。
+- 重新计算网页设置是为了排版：条目覆盖了 UA 时，content 不理会网页的 viewport 标签（`WebContentsImpl::ComputeWebPreferences()`），网页按 980 像素宽排版、缩小到整页可见，和没有 viewport 标签的老式电脑网页一样。标志是在重新加载前设在条目上的，提交时 content 看不出变化，不会自己重算。第一版漏了这一步：UA 换成了 Mac 的，响应式网站（同一份网页按屏幕宽度排版）却还是手机排版，要等别的原因触发重算（比如切换深色模式）才突然变成电脑排版（用户 2026-10-29 在真机上发现："会闪一下，但是还是手机界面"，模拟器里复现了）。
 - 之后在这个标签页里点链接、输网址，content 都沿用当前条目的覆盖设置，直到切回移动版；新标签页从移动版开始。
-- 条目的 `GetUserAgentType()`/`SetUserAgentType()` 改成读写条目上的覆盖标志，菜单据此在"桌面版 / 移动版"两项之间切换。
+- 条目的 `GetUserAgentType()`/`SetUserAgentType()` 改成读写条目上的覆盖标志，菜单据此在"桌面版 / 移动版"两项之间切换。保存会话时本来就存了这个类型，恢复时却没读；现在恢复会话时把标志放回条目、给 WebContents 设上桌面版 UA 并重算设置，app 被系统关掉再打开后，标签页仍是桌面版。
+- 桌面版里 `navigator.platform` 报 `MacIntel`（Blink 的 `NavigatorBase::platform()`，在客户端提示的平台是 macOS 时），和 Safari 一样；原来一直是 `iPhone`，按它判断设备的网页脚本还会当成手机。
 
-模拟器里验证过（2026-10-28，测试页显示请求头里的 UA、`navigator.userAgent` 和 `navigator.userAgentData`）：请求桌面版后页面重新加载，两处都是 Mac 版 Chrome 的 UA，客户端提示 `mobile` 为 false、平台 `macOS`；重新加载、点链接都保持桌面版；菜单变成"请求切换到移动版网站"，点了恢复 iPhone 的 UA。`navigator.platform` 仍是 `iPhone`：UA 覆盖接口不改它，安卓版 Chrome 的桌面模式也一样。
+和 Safari 的差别：iPhone 上的 Safari 请求桌面版时只换 UA 和 `navigator.platform`，仍按 viewport 标签排版（同一台模拟器里验证过，测试页在 Safari 的桌面版里布局宽度仍是 375），所以响应式网站在 Safari 里也还是手机排版。这里照安卓版 Chrome，真按电脑宽度排版。
+
+模拟器里验证过（第一版 2026-10-28；修正后 2026-10-29 在 159 上重测，测试页带 `width=device-width` 的 viewport 标签，显示请求头里的 UA、`navigator.userAgent`、`navigator.platform`、`navigator.userAgentData` 和布局宽度）：请求桌面版后页面重新加载，UA 是 Mac 版 Chrome 的，客户端提示 `mobile` 为 false、平台 `macOS`，`navigator.platform` 是 `MacIntel`，布局宽 980、缩放 0.38；重新加载、点链接、重启 app 都保持桌面版；菜单变成"请求切换到移动版网站"，点了恢复 iPhone 的 UA 和 375 的布局。真实网站：github.com 变成电脑版排版；bilibili 从 m.bilibili.com 换到电脑版的 www.bilibili.com。缩小后的页面能不能双指放大，模拟器里没测（这里的模拟器工具发不了双指手势），推测可以：网页视图开着多点触控，Blink 的手势识别默认支持双指缩放；要真机确认。
 
 ### 0025 空输入框也能粘贴（`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`）
 
@@ -284,6 +288,21 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 - 振动：长按选中文字或在输入框里放下光标时，以及拖拖柄、长按后拖动使选中文字变化时，用 `UISelectionFeedbackGenerator` 振一下。
 
 模拟器里验证过（2026-10-28，和同一台模拟器里的 Safari 在同样的页面上对比截图、逐帧看录屏）：脚本选中的三行文字，前两行都延伸到右边缘，和 Safari 一样；拖柄圆点 47 像素，和 Safari 一样（之前 31 像素）；长按选中词后，手指按着时显示放大镜，松手后才弹出编辑菜单；按着不松再移动，选区扩展到下一行；挂上调试器看到：长按选中时振一次，按着拖动或拖拖柄时选区每变一次振一次，在空输入框里长按时也振一次（松手后菜单里有"粘贴"）；长按链接照常弹出 Chrome 的链接菜单，不显示放大镜、不振。模拟器里感觉不到振动，真机待确认。
+
+### 0028 不在屏幕上的网页标成隐藏（`content/browser/web_contents/web_contents_view_ios.mm`、`ios/web/content/web_state/content_web_state.mm`）
+
+用户 2026-10-29 说"恢复已暂停的网页时似乎会崩溃"。模拟器里没复现（切回很久没看的标签页、退到后台再回来都正常），但查的时候发现：iOS 上从来没有东西告诉 WebContents 网页在不在屏幕上。WebContents 一创建就算可见，之后一直可见。切走的标签页、后台打开的标签页、退到后台的 app 里的网页，`document.visibilityState` 都是 `visible`，不触发 `visibilitychange`，`requestAnimationFrame` 照跑。模拟器里，一个有动画的测试页切到别的标签页后仍每秒画 35–40 帧，只显示标签页网格时 Chromium 占 38% CPU；app 退到后台后每秒还画 4–5 帧（都验证过）。WKWebView 在这些情况下会把网页标成隐藏、停止绘制。
+
+真机上 app 退到后台后，iOS 不允许再用 GPU（后台提交的 Metal 命令会被拒绝），单进程版的 GPU 线程却还在画。这和回到前台时的崩溃有没有关系不知道（推测有可能）；后台标签页一直在画，对发热（"真机反馈的问题"第 1 条）肯定没好处。
+
+补丁：
+
+- content：WebContents 的原生视图（`WebContentsViewIOS` 的 UIScrollView）换成一个子类，进出窗口（`didMoveToWindow`）、所在场景进入后台或回到前台时告诉 `WebContentsViewIOS`，后者调 `UpdateWebContentsVisibility()`：在窗口里、app 在前台才算可见。Mac 和 Aura 也是由原生视图驱动这个接口。
+- ios/web/content：`ContentWebState` 创建 WebContents 时设 `initially_hidden`，后台打开的标签页在显示之前不绘制。content 的可见性变化不再转给 `WasShown()`/`WasHidden()`：Chrome 自己会在显示、隐藏标签页时调它们（和 WebKit 版一样），再转一次会让观察者重复收到通知，而且每次 app 退到后台都会收到。`IsVisible()` 也改成跟随 Chrome 的这两个调用（WebKit 版就是这样），不跟随 WebContents，因为 Chrome 有些代码在 `IsVisible()` 为假时直接跳过，甚至 DCHECK。
+
+隐藏时 content 会拆掉这个视图的合成器，显示时再建一个新的（`BrowserCompositorIOS`），0002 按同一个句柄把新的根图层挂回网页视图；模拟器里切换标签页、退到后台再回来，画面都正常。
+
+模拟器里验证过（2026-10-29，测试页每秒报告 `document.visibilityState` 和绘制的帧数）：回到主屏幕时触发 `visibilitychange`（hidden），帧数降到 0；回到 app 时触发 visible，帧数恢复，画面正常。切到别的标签页后它隐藏，Chromium 的 CPU 从 38% 降到 1.6%（标签页网格里 0%），切回来恢复。"在新标签页中打开"的链接在后台加载时就是隐藏的，切过去后开始绘制。重启 app 后恢复的标签页正常显示。输入框打字（键盘上方的表单工具条照常出现）、长按选词和编辑菜单、请求桌面版网站、定位权限提示都照常，退到后台再回来后也一样。真机待确认，尤其是回到前台时还崩不崩、发热有没有减轻。
 
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`，159 上已删）
 

@@ -1,0 +1,248 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 09:50:00 +0800
+Subject: [PATCH] iOS sideload: hide pages that are not on screen
+
+Nothing on iOS told a WebContents whether its page was on screen: every
+page counted as visible from creation, in tabs that were not shown and
+while the app was in the background. Those pages kept running
+requestAnimationFrame and rendering (35-40 frames a second for an
+animated page in a tab that had been switched away from, with the
+browser at 38% CPU in the simulator while only the tab grid was on
+screen), never got visibilitychange, and kept drawing with the GPU
+after the app left the foreground, which iOS doesn't allow: it refuses
+GPU work from apps in the background. What that does to this
+single-process build on a device is not known.
+
+Do it as WKWebView does: the WebContents' native view reports when it
+enters or leaves a window and when its scene goes to the background or
+comes back (WebContentsViewIOS calls UpdateWebContentsVisibility()), so
+a page is visible only while it is on screen with the app in the
+foreground. ContentWebState creates its WebContents hidden, so a tab
+opened in the background doesn't render until it is shown. Chrome still
+tells the WebState itself when it shows or hides a tab: the web
+contents' visibility changes are not forwarded to WasShown() and
+WasHidden() (that would notify the WebState's observers a second time,
+and each time the app goes to the background), and IsVisible() follows
+Chrome's calls, as with WebKit, instead of the web contents.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator, with a
+page that animates and reports document.visibilityState and its
+animation frames every second: going to the home screen fires
+visibilitychange hidden and stops the frames, coming back fires visible
+and they resume with the page drawn as before; switching to another tab
+hides it (the browser went from 38% to 1.6% CPU, 0% with the tab grid
+on screen) and switching back shows it again; a link opened in a new
+tab loads hidden and starts drawing when the tab is shown; after a
+restart the restored tab is visible. Typing in a text field with the
+keyboard accessory bar, long-press selection with the edit menu,
+Request Desktop Site and the location prompt work as before, also after
+a trip to the background. Not checked on a device.
+
+diff --git a/content/browser/web_contents/web_contents_view_ios.h b/content/browser/web_contents/web_contents_view_ios.h
+index 6e2ad1049585536338d4176a640bd1ba9196e837..24a45864a51ea3a0f1c85fb2d04ad581231fca6e 100644
+--- a/content/browser/web_contents/web_contents_view_ios.h
++++ b/content/browser/web_contents/web_contents_view_ios.h
+@@ -37,6 +37,10 @@ class WebContentsViewIOS : public WebContentsView,
+   WebContentsViewIOS(const WebContentsViewIOS&) = delete;
+   WebContentsViewIOS& operator=(const WebContentsViewIOS&) = delete;
+ 
++  // [ios-blink-sideload] Called by the native view when it enters or leaves a
++  // window, and when its scene goes to the background or comes back.
++  void OnNativeViewVisibilityChanged(bool visible);
++
+   ~WebContentsViewIOS() override;
+ 
+   // WebContentsView implementation --------------------------------------------
+diff --git a/content/browser/web_contents/web_contents_view_ios.mm b/content/browser/web_contents/web_contents_view_ios.mm
+index 1ba5fa37cf9e42b856ad0b3109bf0b370ef304f1..ea68df4ee80f6f3107f595b102ffc4bb8b995430 100644
+--- a/content/browser/web_contents/web_contents_view_ios.mm
++++ b/content/browser/web_contents/web_contents_view_ios.mm
+@@ -17,6 +17,7 @@
+ #include "content/browser/renderer_host/render_widget_host_view_ios.h"
+ #include "content/browser/web_contents/web_contents_impl.h"
+ #include "content/public/browser/context_menu_params.h"
++#include "content/public/browser/visibility.h"
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/browser/web_contents_view_delegate.h"
+ #include "ui/base/cocoa/animation_utils.h"
+@@ -26,6 +27,64 @@
+ #include "content/browser/renderer_host/render_widget_host_view_tvos.h"
+ #endif
+ 
++// [ios-blink-sideload] The WebContents' view. It reports when it enters or
++// leaves a window and when its scene goes to the background or comes back, so
++// that a page is visible only while it is on screen, as with WKWebView. Nothing
++// reported it before: every page stayed visible and kept rendering, in tabs
++// that were not shown and while the app was in the background.
++@interface WebContentsUIView : UIScrollView
++// Not owned. Reset before the owner goes away.
++@property(nonatomic, assign) content::WebContentsViewIOS* owner;
++@end
++
++@implementation WebContentsUIView
++
++- (void)dealloc {
++  [[NSNotificationCenter defaultCenter] removeObserver:self];
++}
++
++- (void)didMoveToWindow {
++  [super didMoveToWindow];
++  NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
++  [center removeObserver:self
++                    name:UISceneDidEnterBackgroundNotification
++                  object:nil];
++  [center removeObserver:self
++                    name:UISceneWillEnterForegroundNotification
++                  object:nil];
++  UIWindowScene* scene = self.window.windowScene;
++  if (scene) {
++    [center addObserver:self
++               selector:@selector(sceneDidEnterBackground:)
++                   name:UISceneDidEnterBackgroundNotification
++                 object:scene];
++    [center addObserver:self
++               selector:@selector(sceneWillEnterForeground:)
++                   name:UISceneWillEnterForegroundNotification
++                 object:scene];
++  }
++  [self updateVisibility:scene && (scene.activationState ==
++                                       UISceneActivationStateForegroundActive ||
++                                   scene.activationState ==
++                                       UISceneActivationStateForegroundInactive)];
++}
++
++- (void)sceneDidEnterBackground:(NSNotification*)notification {
++  [self updateVisibility:NO];
++}
++
++- (void)sceneWillEnterForeground:(NSNotification*)notification {
++  [self updateVisibility:self.window != nil];
++}
++
++- (void)updateVisibility:(BOOL)visible {
++  if (_owner) {
++    _owner->OnNativeViewVisibilityChanged(visible);
++  }
++}
++
++@end
++
+ namespace content {
+ 
+ namespace {
+@@ -52,7 +111,7 @@
+ // WebContentsViewIOS.
+ class WebContentsUIViewHolder {
+  public:
+-  UIScrollView* __strong view_;
++  WebContentsUIView* __strong view_;
+ };
+ 
+ std::unique_ptr<WebContentsView> CreateWebContentsView(
+@@ -70,7 +129,8 @@
+     std::unique_ptr<WebContentsViewDelegate> delegate)
+     : web_contents_(web_contents), delegate_(std::move(delegate)) {
+   ui_view_ = std::make_unique<WebContentsUIViewHolder>();
+-  ui_view_->view_ = [[UIScrollView alloc] init];
++  ui_view_->view_ = [[WebContentsUIView alloc] init];
++  ui_view_->view_.owner = this;
+   [ui_view_->view_ setScrollEnabled:NO];
+   [ui_view_->view_ setAutoresizingMask:UIViewAutoresizingFlexibleWidth |
+                                        UIViewAutoresizingFlexibleHeight];
+@@ -78,9 +138,17 @@
+ }
+ 
+ WebContentsViewIOS::~WebContentsViewIOS() {
++  // [ios-blink-sideload] The WebContents is going away: don't report the view
++  // leaving its window.
++  ui_view_->view_.owner = nullptr;
+   [ui_view_->view_ removeFromSuperview];
+ }
+ 
++void WebContentsViewIOS::OnNativeViewVisibilityChanged(bool visible) {
++  web_contents_->UpdateWebContentsVisibility(visible ? Visibility::VISIBLE
++                                                     : Visibility::HIDDEN);
++}
++
+ gfx::NativeView WebContentsViewIOS::GetNativeView() const {
+   return gfx::NativeView(ui_view_->view_);
+ }
+diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
+index bba29edf247ffa864f6f3248c1e766cdefac130a..e8a5525584201c2a23d7eccac05ed1ef09d83e5c 100644
+--- a/ios/web/content/web_state/content_web_state.h
++++ b/ios/web/content/web_state/content_web_state.h
+@@ -283,6 +283,8 @@ class ContentWebState : public WebState,
+   bool top_control_scroll_in_progress_ = false;
+   bool cached_shrink_controls_ = false;
+   bool created_with_opener_ = false;
++  // [ios-blink-sideload] Whether Chrome shows the tab (see IsVisible()).
++  bool is_visible_ = false;
+   // [ios-blink-sideload] Whether the page may use the camera and the
+   // microphone, once asked. Kept until another page shows, as WebKit does.
+   std::optional<bool> camera_allowed_;
+diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
+index 01c54b4d59ad11f0943558d7a82a51b6df4052ae..766cb8456e902d2c5113b6f7b455a5207f7d3a60 100644
+--- a/ios/web/content/web_state/content_web_state.mm
++++ b/ios/web/content/web_state/content_web_state.mm
+@@ -164,6 +164,10 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+   scoped_refptr<content::SiteInstance> site_instance;
+   content::WebContents::CreateParams createParams(browser_context,
+                                                   site_instance);
++  // [ios-blink-sideload] The page becomes visible when its view is on screen
++  // (see WebContentsViewIOS). Until then, like a tab opened in the background,
++  // it doesn't render.
++  createParams.initially_hidden = true;
+   created_with_opener_ = params.created_with_opener;
+   if (created_with_opener_) {
+     ContentWebState* opener_web_state =
+@@ -332,6 +336,7 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ 
+ void ContentWebState::WasShown() {
+   ForceRealized();
++  is_visible_ = true;
+ 
+   // Update last active time when the ContentWebState transition to visible.
+   last_active_time_ = base::Time::Now();
+@@ -343,6 +348,7 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ 
+ void ContentWebState::WasHidden() {
+   ForceRealized();
++  is_visible_ = false;
+   for (auto& observer : observers_) {
+     observer.WasHidden(this);
+   }
+@@ -456,9 +462,10 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ }
+ 
+ bool ContentWebState::IsVisible() const {
+-  DCHECK(web_contents_);
+-  return web_contents_->GetVisibility() == content::Visibility::VISIBLE ? true
+-                                                                        : false;
++  // [ios-blink-sideload] Chrome's view of the tab, as with WebKit: shown by
++  // WasShown(), hidden by WasHidden(). The web contents' own visibility also
++  // turns off while the app is in the background.
++  return is_visible_;
+ }
+ 
+ bool ContentWebState::IsCrashed() const {
+@@ -752,11 +759,11 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+   // Occlusion is not supported on iOS.
+   DCHECK_NE(visibility, content::Visibility::OCCLUDED);
+ 
+-  if (visibility == content::Visibility::VISIBLE) {
+-    WasShown();
+-  } else {
+-    WasHidden();
+-  }
++  // [ios-blink-sideload] Not forwarded to WasShown() and WasHidden(). The web
++  // contents' visibility now follows its view (on screen, app in the
++  // foreground; see WebContentsViewIOS), while Chrome calls those itself when
++  // it shows or hides a tab, as with WebKit. Forwarding would notify the
++  // observers again, and each time the app goes to the background.
+ }
+ 
+ void ContentWebState::TitleWasSet(content::NavigationEntry* entry) {
+-- 
+2.54.0 (Apple Git-157)
+

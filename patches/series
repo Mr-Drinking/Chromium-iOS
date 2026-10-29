@@ -26,6 +26,7 @@
 0025-ios-sideload-edit-menu-for-caret.patch
 0026-ios-sideload-site-permissions.patch
 0027-ios-sideload-selection-like-safari.patch
+0028-ios-sideload-hide-offscreen-pages.patch
 # Optional; applied only with --with-optional, or uncomment to make default.
 # optional/0101-gl-init-failure-without-abort.patch
 # optional/0102-disable-media-capture.patch
