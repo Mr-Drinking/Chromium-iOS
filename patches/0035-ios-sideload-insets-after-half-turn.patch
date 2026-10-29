@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 18:39:27 +0800
+Subject: [PATCH] iOS sideload: page insets after a half turn
+
+Turning the phone from one landscape side to the other moves Chrome's
+App Bar across the screen, but the view keeps its size, so
+-viewWillTransitionToSize: isn't called, and that is where
+BrowserViewController invalidates the page's insets. The page kept the
+inset of the side the App Bar had left and lay partly under the App Bar
+on the other side, with a gray strip where the inset still was (seen on
+an iPhone 13 mini). Invalidate the inset range when the App Bar changes
+position too.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator: after
+turning left and then straight to the right (and back), the scroll
+view's insets follow the App Bar and the page lies right next to it,
+whole; before, the insets kept the old side ({62, 0, 0, 68} with the bar
+on the left) and the page was 68 points under the bar. Not checked on a
+device.
+
+diff --git a/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm b/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm
+index 24201af6ec2324603dd1d78856c03da8dc4ce241..2317acc5deabd38a3b130f877f324327c4a66527 100644
+--- a/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm
++++ b/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm
+@@ -703,6 +703,14 @@ - (void)layoutState:(SceneLayoutState*)layoutState
+   [self updateToolbarConstraints];
+   [self updateSecondaryToolbarBottomConstraint];
+   [self animateTransition];
++  // [ios-blink-sideload] The page's insets follow the App Bar too. Turning the
++  // phone from one landscape side to the other moves the App Bar across but
++  // keeps the view's size, so -viewWillTransitionToSize: isn't called to
++  // invalidate them: the page stayed inset on the side the App Bar left, and
++  // partly under the App Bar on the other side.
++  if (IsFullscreenRefactoringEnabled() && _fullscreenBrowserAgent) {
++    _fullscreenBrowserAgent->InvalidateInsetRange();
++  }
+ }
+ 
+ #pragma mark - Public methods
+-- 
+2.54.0 (Apple Git-157)
+

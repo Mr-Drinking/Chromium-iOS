@@ -378,6 +378,33 @@ Blink 版这些都没接，一共补了四处：
 
 用 Mojo 的 WebUI（通过 `MojoFacade`）还不行：chrome://chrome-urls 只有标题、没有列表。`MojoFacade` 要在主框架里执行异步 JS（`ExecuteAsyncJavaScript`）来取页面发出的 Mojo 消息，而 Blink 版的 `ContentWebFrame` 还没实现（上游 TODO crbug.com/507056709）。没在真机上验证。
 
+### 0035 转 180° 后的网页内边距（`ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm`）
+
+用户 2026-10-29 用测试版 4 录屏：从一侧横屏直接转到另一侧，网页一半压在侧栏下面，另一边留出一条灰色。模拟器里复现了（之前测的是"横屏 → 竖屏 → 另一侧横屏"，没有直接转 180°）。原因：
+- 横屏时 Chrome 的侧栏（App Bar）报告自己挡住了左边或右边，`FullscreenBrowserAgent` 汇总成网页滚动视图的内边距。
+- 汇总要等有人调 `InvalidateInsetRange()`，转屏时由 `BrowserViewController` 在 `-viewWillTransitionToSize:` 里调。
+- 转 180° 时视图尺寸不变，这个方法不会被调用，侧栏换了边，内边距却还是旧的：侧栏到了左边，内边距仍是右边 68 点。
+
+补丁在侧栏位置变化时（`-layoutState:didChangeAppBarPosition:`，`BrowserViewController` 本来就在监听）也调一次 `InvalidateInsetRange()`。这多半也是上游的问题（推测：WebKit 版的内边距走的是同一条路）。
+
+模拟器里验证过（2026-10-29）：左横屏直接转到右横屏再转回来，滚动视图的内边距跟着侧栏走，网页紧挨侧栏、完整显示。没在真机上验证。
+
+### 0036 转屏过程中网页一直有画面（`content/browser/renderer_host/render_widget_host_view_ios_uiview.mm`、`render_widget_host_view_ios.mm`、`content/browser/web_contents/web_contents_view_ios.mm`）
+
+用户 2026-10-29 指出，WebKit 内核的浏览器（Safari、官方 Chrome）转屏时不会"转完再渲染"，我们的版本转动过程中会露出一大块灰色，并录了官方 Chrome 转屏的对比视频。原因：
+- 转屏时网页视图立刻变成新尺寸，网页却要过一会儿才按新尺寸画出来。
+- 在这之前，上一帧只盖住视图的一部分，其余地方露出 `WebContentsViewIOS` 写死的浅灰色背景（`UIColor.lightGrayColor`）。
+- WKWebView 的做法是先把旧画面按新宽度缩放着显示，新布局好了再换上。
+
+补丁照这个做：
+- 动画中网页视图的宽度变化时（`-[RenderWidgetUIView setFrame:]`/`setBounds:`），先给自己拍一张快照（`-snapshotViewAfterScreenUpdates:NO`），等比缩放到新宽度盖在上面。
+- `RenderWidgetHostViewIOS` 记下新尺寸的合成表面编号（`LocalSurfaceId`），这个编号的帧激活后约 60 毫秒撤掉快照。新帧由 GPU 线程直接画进视图的图层（0002），给它几帧时间上屏。
+- 1.5 秒内没有新帧的话，也撤掉。
+- 只有宽度变化才拍快照：键盘、工具栏只改高度，不受影响。
+- 没被画面盖住的地方显示网页的背景色：和 Mac 一样设在视图上（`UpdateBackgroundColor()`），外层的浅灰色换成系统背景色。
+
+模拟器里验证过（2026-10-29，转屏时连续截图）：竖屏转横屏、横屏转竖屏，转动过程中都是整页内容，几帧之内换成新布局，没有灰色区域；新帧迟迟不来时，显示的是放大后的旧画面。没在真机上验证；真机上网页画得慢，快照会停留得更久。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`，159 上已删）
 
 **升到 159 后不再需要，已经删掉。** 上游 2026-10-27 自己修了下面这两处（V8 `c8b70908`「Fix build break after TrustedCast and raw() hardening」、`d1204af1`「Fix build break after SharedFunctionInfo flags move」），159 的 V8（`0388bc74`）不打补丁，DrumBrake 在模拟器和真机两种配置下都编得过，模拟器里的测试页结果正常（2026-10-29 验证过）。下面是 158 时的记录。
