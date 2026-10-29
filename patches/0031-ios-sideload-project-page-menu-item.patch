@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 14:27:44 +0800
+Subject: [PATCH] iOS sideload: menu item for the project's page
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The overflow menu's "Share Chromium" shared the App Store link of Google
+Chrome, which isn't this app (a sideloaded one isn't in the App Store).
+Make the item open the project's page on GitHub in a new tab instead,
+titled "GitHub 项目主页" in Chinese and "Project on GitHub" otherwise.
+
+The title isn't a message in ios_strings.grd: adding one regenerates a
+header most of ios/chrome includes, which rebuilds nearly all of it.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator: the menu
+shows "GitHub 项目主页" with a link symbol under Help, where "共享
+Chromium" was, and tapping it opens
+https://github.com/Mr-Drinking/Chromium-iOS in a new tab.
+
+diff --git a/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm b/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
+index f1979cdfed13e6a21ce927daa0c9e2bc40c9fddf..f9f7375f6656a60a3319930a91943f3bd883e429 100644
+--- a/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
++++ b/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
+@@ -163,6 +163,25 @@
+ 
+ namespace {
+ 
++// [ios-blink-sideload] The project the sideloaded app is built from. The menu
++// item that shared Chrome's App Store link (Google Chrome, not this app) opens
++// it instead.
++const char kProjectHomepageURL[] = "https://github.com/Mr-Drinking/Chromium-iOS";
++
++// [ios-blink-sideload] The title of that menu item. It isn't a message in
++// ios_strings.grd: adding one regenerates a header most of ios/chrome includes.
++NSString* ProjectHomepageTitle() {
++  NSString* localization =
++      NSBundle.mainBundle.preferredLocalizations.firstObject;
++  if ([localization hasPrefix:@"zh_TW"]) {
++    return @"GitHub 專案首頁";
++  }
++  if ([localization hasPrefix:@"zh"]) {
++    return @"GitHub 项目主页";
++  }
++  return @"Project on GitHub";
++}
++
+ #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
+ NSString* const kGeminiBrandedLogoSymbol = @"gemini_logo";
+ #else
+@@ -1021,17 +1040,18 @@ - (void)initializeModel {
+                                          [weakSelf openHelp];
+                                        }];
+ 
++  // [ios-blink-sideload] Opens the project's page, see kProjectHomepageURL.
+   self.shareChromeAction = [self
+-      createOverflowMenuActionWithNameID:IDS_IOS_OVERFLOW_MENU_SHARE_CHROME
+-                              actionType:overflow_menu::ActionType::ShareChrome
+-                              symbolName:kShareSymbol
+-                            systemSymbol:YES
+-                        monochromeSymbol:NO
+-                         accessibilityID:kToolsMenuShareChromeId
+-                            hideItemText:nil
+-                                 handler:^{
+-                                   [weakSelf showShareSheetForChromeApp];
+-                                 }];
++      createOverflowMenuActionWithName:ProjectHomepageTitle()
++                            actionType:overflow_menu::ActionType::ShareChrome
++                            symbolName:@"link"
++                          systemSymbol:YES
++                      monochromeSymbol:NO
++                       accessibilityID:kToolsMenuShareChromeId
++                          hideItemText:nil
++                               handler:^{
++                                 [weakSelf openProjectHomepage];
++                               }];
+ 
+   self.defaultBrowserAction =
+       [self createOverflowMenuActionWithNameID:
+@@ -3164,6 +3184,16 @@ - (void)showShareSheetForChromeApp {
+   [self.activityServiceHandler showShareSheetForChromeApp];
+ }
+ 
++// [ios-blink-sideload] Dismisses the menu and opens the project's page in a
++// new tab.
++- (void)openProjectHomepage {
++  [self dismissMenu];
++  OpenNewTabCommand* command =
++      [OpenNewTabCommand commandWithURLFromChrome:GURL(kProjectHomepageURL)];
++  command.originPoint = [self toolsMenuButtonCenter];
++  [self.sceneHandler openURLInNewTab:command];
++}
++
+ // Dismisses the menu and opens default browser settings.
+ - (void)openDefaultBrowserSettings {
+   _defaultBrowserShortcutActionTaken = YES;
+-- 
+2.54.0 (Apple Git-157)
+

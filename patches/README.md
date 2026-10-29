@@ -2,7 +2,7 @@
 
 写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。2026-10-29 升到 `3313f82787695ce167d13fb795a435d3019af3f6`（159.0.8129.0）：只有 0023 冲突（上游在 `caret_display_item_client.cc` 开头加了 include），对上上下文后重新导出；0005、0016 只是行号变了，也换成了重新导出的版本；可选补丁也能打上；V8 补丁 0201 上游已经修好，删掉了（都验证过）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
 
-**状态：** 0001–0028 在 159 上模拟器和真机两种配置下都编译通过，模拟器里逐项回归测试过（2026-10-29，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上用户用过含 0001–0022 的测试版（Release 3、4、6）和含 0001–0027 的 159 正式版（2026-10-29 发现桌面版不起作用，0024 已修正），反馈见 [docs/status.md](../docs/status.md)；0023、0025–0027 的效果和 0024 的修正、0028 还没在真机上确认过。
+**状态：** 0001–0032 在 159 上模拟器和真机两种配置下都编译通过，模拟器里逐项回归测试过（2026-10-29，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上用户用过含 0001–0022 的测试版（Release 3、4、6）和含 0001–0027、0001–0028 的 159 正式版（发现桌面版不起作用、转屏后画面错乱、关闭 app 时崩溃，分别由 0024 的修正、0030、0029 处理），反馈见 [docs/status.md](../docs/status.md)；0023、0025–0027 的效果和 0024 的修正、0028–0032 还没在真机上确认过。
 
 | 补丁 | 改动文件 | 作用 |
 |---|---|---|
@@ -34,6 +34,10 @@
 | `0026-ios-sideload-site-permissions.patch` | `ios/web/content/content_permission_manager.{h,mm}`（新）、`ios/web/content/content_browser_context.{h,mm}`、`ios/web/content/web_state/content_web_state.{h,mm}`、`ios/web/content/init/{ios_browser_main_parts,ios_content_browser_client}.*`、`ios/web/content/{BUILD.gn,DEPS}`、`ios/web/content/init/{BUILD.gn,DEPS}` | 网站权限：写剪贴板允许，定位、读剪贴板弹提示问用户，摄像头、麦克风用 Chrome 现成的提示；补上 Core Location 需要的系统定位权限管理器 |
 | `0027-ios-sideload-selection-like-safari.patch` | `third_party/blink/renderer/core/layout/inline/inline_cursor.cc`、`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.{h,mm}`、`ios/web/content/ui/content_context_menu_controller.mm` | 选区像 Safari：多行选区是整块，拖柄圆点不再缩小，长按时显示放大镜、可接着拖动扩展选区、松手后弹菜单，选区变化时振动 |
 | `0028-ios-sideload-hide-offscreen-pages.patch` | `content/browser/web_contents/web_contents_view_ios.{h,mm}`、`ios/web/content/web_state/content_web_state.{h,mm}` | 不在屏幕上的网页标成隐藏（和 WKWebView 一样）：网页视图离开窗口、app 退到后台时隐藏，回到屏幕上再显示；后台打开的标签页一开始就是隐藏的。原来所有网页一直算"可见"，切走的标签页和退到后台的 app 里的网页还在不停绘制 |
+| `0029-ios-sideload-nonfatal-dump-checks.patch` | `base/check.cc` | 真机版里，Chromium 只上报、不崩溃的检查（`DUMP_WILL_BE_CHECK`、`DUMP_WILL_BE_NOTREACHED`、还没到期的 `NotFatalUntil`）和正式版 Chrome 一样只记录不闪退；原来非官方构建一律崩溃，app 每次被关闭都崩一次（单进程的渲染器宿主比用户配置活得久）。模拟器版开着 DCHECK，照旧崩溃，方便测试时发现问题 |
+| `0030-ios-sideload-follow-rotations.patch` | `content/browser/renderer_host/browser_compositor_ios.{h,mm}`、`content/browser/renderer_host/render_widget_host_view_ios.{h,mm}`、`render_widget_host_view_ios_uiview.mm`、`ui/display/ios/screen_ios.mm` | 横竖屏切换后画面正常：网页按视图大小绘制（和 Mac 一样，尺寸一变就换新的合成表面），屏幕信息跟着界面方向及时更新（`screen.orientation` 报对），网页视图跟着滚动视图的实际偏移放置，没画到的地方显示网页的背景色，不再是红色 |
+| `0031-ios-sideload-project-page-menu-item.patch` | `ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm` | 菜单里的"共享 Chromium"（分享的是谷歌 Chrome 的 App Store 链接）换成"GitHub 项目主页"，在新标签页打开本项目的 GitHub 页面 |
+| `0032-ios-sideload-hide-google-lens.patch` | `ios/chrome/browser/lens_overlay/public/{lens_overlay_availability_utils.mm,BUILD.gn}` | 去掉用不了的 Google 智能镜头入口（Chromium 没有镜头）：底栏的助手按钮变成"问问 Google"，菜单里没有"使用 Google 智能镜头搜索屏幕内容"了 |
 | `optional/0101-gl-init-failure-without-abort.patch` | `ui/gl/init/gl_factory_ios.mm` | GL 不可用时记日志、返回空，而不是直接崩溃（排错用） |
 | `optional/0102-disable-media-capture.patch` | `content/browser/renderer_host/media/media_devices_manager.cc`、`media/capture/video/apple/video_capture_device_avfoundation.mm` | 不枚举/不打开摄像头和麦克风（只在 iOS 27 上也因此崩溃时才用） |
 

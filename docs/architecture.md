@@ -304,6 +304,38 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 
 模拟器里验证过（2026-10-29，测试页每秒报告 `document.visibilityState` 和绘制的帧数）：回到主屏幕时触发 `visibilitychange`（hidden），帧数降到 0；回到 app 时触发 visible，帧数恢复，画面正常。切到别的标签页后它隐藏，Chromium 的 CPU 从 38% 降到 1.6%（标签页网格里 0%），切回来恢复。"在新标签页中打开"的链接在后台加载时就是隐藏的，切过去后开始绘制。重启 app 后恢复的标签页正常显示。输入框打字（键盘上方的表单工具条照常出现）、长按选词和编辑菜单、请求桌面版网站、定位权限提示都照常，退到后台再回来后也一样。真机待确认，尤其是回到前台时还崩不崩、发热有没有减轻。
 
+### 0029 真机版的诊断检查只记录、不崩溃（`base/check.cc`）
+
+用户 2026-10-29 从 iPhone 13 mini（iOS 27.2）传来两份崩溃日志（`Chromium-2026-10-29-131202.ips`、`-133137.ips`），是同一个崩溃：app 已经在后台（`procRole` 是 Non UI），被关闭时（上划关掉或系统回收，`-applicationWillTerminate:`）销毁用户配置，`~BrowserContextImpl()` 发现还有 RenderProcessHost 引用这个浏览器上下文（单进程模式下进程内渲染器的宿主一直活到最后），走到 `DUMP_WILL_BE_NOTREACHED()`，abort。用 sideload-2 的编译产物还原了地址：反汇编里传给它的 Location 是 `browser_context_impl.cc` 第 148 行（验证过）。
+
+`DUMP_WILL_BE_*` 和还没到期的 `CHECK(..., base::NotFatalUntil::M…)` 在正式版 Chrome 里只上报、不崩溃，但 `base/check.cc` 的 `GetDumpSeverity()` 在非官方构建里返回 FATAL（为了在测试中尽早发现）。侧载版是面向用户的构建，却不是官方构建，真机上每一处这类检查都会让 app 闪退。
+
+补丁：iOS 上用官方构建的严重级别：开着 DCHECK 时是 DCHECK（模拟器版，照旧崩溃，测试时能发现问题），否则是 ERROR（真机版：记日志、生成一份不上传的转储，然后继续）。只改了一个 .cc 文件，重编只需重新链接。
+
+没在真机上验证；模拟器版开着 DCHECK，行为不变。chatgpt.com 那次崩溃的日志没留下来（见 status.md 第 31 条），是不是这类检查不知道（推测有可能）。
+
+### 0030 横竖屏切换（`content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm`、`browser_compositor_ios.{h,mm}`、`ui/display/ios/screen_ios.mm`）
+
+用户 2026-10-29 说横竖屏切换后渲染错误。模拟器里用 UIKit 自己的调用转屏（调试器里先设 `UIDevice` 的方向，再调场景的 `requestGeometryUpdateWithPreferences:`），复现出三个问题：
+
+1. **帧的尺寸和合成表面不同步。** 网页每一帧按屏幕大小画（`GetCompositorViewportPixelSize()` 用的是屏幕尺寸），浏览器端的合成器却只在网页视图的尺寸变化时才分配新的合成表面（`LocalSurfaceId`）。转屏改变了屏幕尺寸，没有新表面：模拟器版触发 `AsyncLayerTreeFrameSink` 的 DCHECK（同一个表面里帧高从 2436 变成 1125 像素）直接崩溃；关了 DCHECK 的真机版显示被裁掉的网页，旁边是网页没画到的区域（模拟器里是红色，用户的手机上是灰色）。改成和 Mac 一样按浏览器合成器显示网页的尺寸（视图大小）画，这个尺寸一变就会分配新表面。顺带省了工具栏后面那部分的绘制。
+2. **屏幕信息慢一拍。** `display::Screen` 的 iOS 实现在设备方向变化时投一个任务去读 `UIScreen` 的尺寸，这时界面还没转、场景还是旧尺寸，于是网页拿到的是上一次的屏幕尺寸，横屏时还报 "portrait-secondary"；转回竖屏后新开的标签页（chatgpt.com）按横屏的高度绘制，下半截空着。改成跟随窗口场景的界面方向，尺寸按方向从竖屏尺寸转过来，并且用 KVO 观察场景的 `effectiveGeometry`（Apple 推荐的跟随转屏的办法）；网页视图也观察显示器变化，不只在布局时更新屏幕信息。
+3. **网页视图的位置。** 网页视图在 Chrome 的滚动视图里按"网页的滚动偏移 + 内边距"放置，默认滚动视图的 `contentOffset` 总等于网页的滚动偏移；转屏时 UIKit 或 Chrome 把 `contentOffset` 改成了 -42，网页就画到工具栏下方 42 点的地方，露出滚动视图的灰色底。改成按滚动视图实际的 `contentOffset` 放置，并在它变化时跟着动。
+
+另外，网页还没画到的地方原来显示上游调试用的红色，改成和 Mac 一样显示网页的背景色（默认白色）。
+
+模拟器里验证过（2026-10-29）：测试页左转报 744×313、屏幕 812×375 landscape-primary，右转 landscape-secondary，转回竖屏 375×631、portrait-primary，每次都有 change 事件；横屏和转回竖屏后网页都完整、紧贴工具栏；转屏后新开 chatgpt.com 再来回转，都完整显示；来回转多次 app 不崩。没在真机上验证。
+
+### 0031 菜单里的"GitHub 项目主页"（`ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm`）
+
+菜单底部的"共享 Chromium"分享的是谷歌 Chrome 的 App Store 链接，和这个侧载 app 无关。按用户的要求（2026-10-29）换成"GitHub 项目主页"（繁体中文"GitHub 專案首頁"，其他语言 "Project on GitHub"），在新标签页打开 https://github.com/Mr-Drinking/Chromium-iOS ，图标换成链接。
+
+标题写在代码里，按 app 实际使用的本地化（`zh_CN`、`zh_TW`）选：往 `ios_strings.grd` 加新词条会重新生成一个 ios/chrome 几乎每个文件都引用的头文件，模拟器版和真机版都得重编大半。菜单项的类型和无障碍 ID 沿用 ShareChrome，用户自定义过的菜单顺序不受影响。模拟器里验证过。
+
+### 0032 去掉 Google 智能镜头（`ios/chrome/browser/lens_overlay/public/lens_overlay_availability_utils.mm`）
+
+Chromium 没有 Google 镜头：它的提供方（`ios/chrome/browser/providers/lens/chromium_lens.mm`）创建不出镜头叠层、取景器和控制器，`IsLensSupported()` 返回 false。大部分入口（地址栏、键盘上方、图片的长按菜单）都检查这个函数，镜头叠层的入口却只看策略和默认搜索引擎：底栏的助手按钮显示"Google 智能镜头"，点了只会变灰；菜单里的"使用 Google 智能镜头搜索屏幕内容"点了没反应。`IsLensOverlayEntrypointAvailable()` 也检查 `IsLensSupported()` 后，助手按钮退到下一项"问问 Google"（打开 Google 的 AI 模式网页，能用），菜单项不再出现。模拟器里验证过；新标签页和地址栏本来就没有镜头按钮。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`，159 上已删）
 
 **升到 159 后不再需要，已经删掉。** 上游 2026-10-27 自己修了下面这两处（V8 `c8b70908`「Fix build break after TrustedCast and raw() hardening」、`d1204af1`「Fix build break after SharedFunctionInfo flags move」），159 的 V8（`0388bc74`）不打补丁，DrumBrake 在模拟器和真机两种配置下都编得过，模拟器里的测试页结果正常（2026-10-29 验证过）。下面是 158 时的记录。

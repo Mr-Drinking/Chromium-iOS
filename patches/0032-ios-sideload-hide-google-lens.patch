@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 14:27:47 +0800
+Subject: [PATCH] iOS sideload: hide Google Lens
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Chromium has no Google Lens: its provider (chromium_lens.mm) creates no
+overlay, view finder or controller, and IsLensSupported() is false. Most
+Lens entry points check that, but the Lens overlay's don't: the app
+bar's assistant button showed Google Lens and only grayed out when
+tapped, and the menu offered "Search screen with Google Lens", which did
+nothing. Make IsLensOverlayEntrypointAvailable() check it too. The
+assistant button then falls back to "Ask Google", which opens Google's AI
+Mode page and works.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator: the app
+bar shows "问问 Google" instead of "Google 智能镜头", and the menu no
+longer has "使用 Google 智能镜头搜索屏幕内容"; the new tab page and the
+location bar show no Lens button.
+
+diff --git a/ios/chrome/browser/lens_overlay/public/BUILD.gn b/ios/chrome/browser/lens_overlay/public/BUILD.gn
+index 29aaabfa0848e03339816c89d5517e39cbdf7f21..65a59ed82fc27461464167d0fcc4645e3e4ebb58 100644
+--- a/ios/chrome/browser/lens_overlay/public/BUILD.gn
++++ b/ios/chrome/browser/lens_overlay/public/BUILD.gn
+@@ -54,6 +54,7 @@ source_set("lens_overlay_availability_utils") {
+     "//ios/chrome/browser/search_engines/model:search_engines_util",
+     "//ios/chrome/browser/shared/public/features",
+     "//ios/chrome/browser/shared/ui/util",
++    "//ios/public/provider/chrome/browser/lens:lens_api",
+     "//ios/web/public",
+   ]
+   public_deps = [ ":entrypoint" ]
+diff --git a/ios/chrome/browser/lens_overlay/public/lens_overlay_availability_utils.mm b/ios/chrome/browser/lens_overlay/public/lens_overlay_availability_utils.mm
+index ad7835a46b06605caa9d05c10acd32c37b85fce6..09c3e93a5339c15b3c344f9e2844154ba791a3ea 100644
+--- a/ios/chrome/browser/lens_overlay/public/lens_overlay_availability_utils.mm
++++ b/ios/chrome/browser/lens_overlay/public/lens_overlay_availability_utils.mm
+@@ -17,6 +17,7 @@
+ #import "ios/chrome/browser/search_engines/model/search_engines_util.h"
+ #import "ios/chrome/browser/shared/public/features/features.h"
+ #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
++#import "ios/public/provider/chrome/browser/lens/lens_api.h"
+ #import "ios/web/public/browser_state.h"
+ #import "ios/web/public/web_state.h"
+ 
+@@ -35,6 +36,14 @@ bool IsLensOverlayEntrypointAvailable(LensOverlayEntrypoint entrypoint,
+                                       TemplateURLService* template_url_service,
+                                       web::WebState* web_state,
+                                       UITraitCollection* trait_collection) {
++  // [ios-blink-sideload] Chromium has no Lens: its provider creates no overlay
++  // (chromium_lens.mm). Don't offer entry points that do nothing, such as the
++  // app bar's Google Lens button and the menu's "Search screen with Google
++  // Lens".
++  if (!ios::provider::IsLensSupported()) {
++    return false;
++  }
++
+   if (!profile_prefs || !IsLensOverlayAllowedByPolicy(profile_prefs)) {
+     return false;
+   }
+-- 
+2.54.0 (Apple Git-157)
+

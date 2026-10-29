@@ -1,0 +1,496 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 14:27:39 +0800
+Subject: [PATCH] iOS sideload: follow rotations
+
+Turning the phone left the page wrong in three ways.
+
+The page drew frames the size of the screen
+(GetCompositorViewportPixelSize()), but the browser compositor gave it a
+new surface only when the view's size changed. A rotation changed the
+screen's size without a new surface: the simulator hit a DCHECK in
+AsyncLayerTreeFrameSink (a frame 1125 pixels high in a surface whose
+frames had been 2436), and a phone showed the page cropped next to an
+area the page never drew (red here, gray on the phone). Use the size the
+browser compositor shows the page at, as the Mac does: each change of it
+comes with a new surface.
+
+The screen info was one rotation behind. display::Screen updated in a
+task posted when the device's orientation changed, which ran before the
+interface rotated and the scene had its new size: the page was told the
+previous size, and "portrait-secondary" in landscape, and a tab opened
+after turning back to portrait was drawn at the landscape height. Follow
+the window scene's interface orientation, with the bounds that go with
+it, and observe the scene's effectiveGeometry, Apple's recommended way
+to follow rotations. Views now also update their screen info when the
+display changes, not only when they lay out.
+
+The page's view sat in the scroll view at the page's scroll offset, but
+UIKit or Chrome moves the scroll view's contentOffset during a rotation
+(to -42 here), so the page was drawn 42 points below the toolbar, over
+the scroll view's gray background. Place the view at the scroll view's
+contentOffset, and follow it when it changes.
+
+Areas without a frame of the page showed upstream's debugging color, red.
+Show the page's background color instead, as the Mac does.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator, rotating
+with UIKit's own calls (UIDevice's orientation, then the scene's
+requestGeometryUpdateWithPreferences:): a test page reporting its sizes
+and screen.orientation got 744x313 with a 812x375 landscape-primary
+screen turned left, landscape-secondary turned right and 375x631 with a
+375x812 portrait-primary screen back in portrait, each with a change
+event; it was drawn whole, right below the toolbar, in landscape and
+after turning back (before: cropped next to red in landscape, 42 points
+lower with a gray band in portrait, and the DCHECK). chatgpt.com, opened
+after a rotation and then rotated both ways, was drawn whole (before: its
+lower part red). Not checked on a device.
+
+diff --git a/content/browser/renderer_host/browser_compositor_ios.h b/content/browser/renderer_host/browser_compositor_ios.h
+index 936fac39e33f2b6c74f345e64a2f893ae83b5858..e0ea2f9cdab9bd7c1dc9d78f1a2c925c81fddf5b 100644
+--- a/content/browser/renderer_host/browser_compositor_ios.h
++++ b/content/browser/renderer_host/browser_compositor_ios.h
+@@ -185,7 +185,9 @@ class CONTENT_EXPORT BrowserCompositorIOS : public DelegatedFrameHostClient,
+   std::unique_ptr<DelegatedFrameHost> delegated_frame_host_;
+   std::unique_ptr<ui::LayerSurface> root_layer_;
+ 
+-  SkColor background_color_ = SK_ColorRED;
++  // [ios-blink-sideload] White, as on the Mac, not red: the page's background
++  // color (RenderWidgetHostViewIOS::UpdateBackgroundColor()) once it has one.
++  SkColor background_color_ = SK_ColorWHITE;
+ 
+   // The viz::ParentLocalSurfaceIdAllocator for the delegated frame host
+   // dispenses viz::LocalSurfaceIds that are rendered into by the renderer
+diff --git a/content/browser/renderer_host/browser_compositor_ios.mm b/content/browser/renderer_host/browser_compositor_ios.mm
+index 7b33792a50584d3bd0b496ffa10db10ea5097f72..84bc17dc874ec3e86c6b1fe360a66a225662e0fd 100644
+--- a/content/browser/renderer_host/browser_compositor_ios.mm
++++ b/content/browser/renderer_host/browser_compositor_ios.mm
+@@ -84,7 +84,8 @@
+ }
+ 
+ void BrowserCompositorIOS::SetBackgroundColor(SkColor background_color) {
+-  // background_color_ = background_color;
++  // [ios-blink-sideload] Keep the color, for compositors created later too.
++  background_color_ = background_color;
+   if (compositor_) {
+     compositor_->SetBackgroundColor(background_color_);
+   }
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
+index fa8b9a090fe32b358bac415aedd834b057a35e5d..0d4bf31e4213680fe529d24e4affee4d7ae91c12 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios.h
+@@ -23,6 +23,7 @@
+ #include "third_party/blink/public/mojom/input/focus_type.mojom-forward.h"
+ #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
+ #include "ui/accelerated_widget_mac/ca_layer_frame_sink.h"
++#include "ui/display/display_observer.h"
+ #include "ui/events/gesture_detection/filtered_gesture_provider.h"
+ 
+ namespace ui {
+@@ -57,7 +58,8 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+       public TextInputManager::Observer,
+       public ui::GestureProviderClient,
+       public ui::CALayerFrameSink,
+-      public RenderFrameMetadataProvider::Observer {
++      public RenderFrameMetadataProvider::Observer,
++      public display::DisplayObserver {
+  public:
+   // The view will associate itself with the given widget. The native view must
+   // be hooked up immediately to the view hierarchy, or else when it is
+@@ -164,6 +166,10 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+   display::ScreenInfo GetCurrentScreenInfo() const override;
+   void SetCurrentDeviceScaleFactor(float device_scale_factor) override;
+   void UpdateScreenInfo() override;
++
++  // display::DisplayObserver:
++  void OnDisplayMetricsChanged(const display::Display& display,
++                               uint32_t changed_metrics) override;
+   void TransformPointToRootSurface(gfx::PointF* point) override;
+   bool TransformPointToCoordSpaceForView(
+       const gfx::PointF& point,
+@@ -228,6 +234,8 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+   bool CanBecomeFirstResponderForTesting() const;
+   bool CanResignFirstResponderForTesting() const;
+   void ContentInsetChanged();
++  // [ios-blink-sideload] Called when the scroll view's contentOffset changes.
++  void ContentOffsetChanged();
+ #if !BUILDFLAG(IS_IOS_TVOS)
+   void OnKeyboardVisibilityChanged();
+ #endif  // !BUILDFLAG(IS_IOS_TVOS)
+@@ -315,6 +323,10 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+   // [ios-blink-sideload] Displays CALayerParams delivered to
+   // UpdateCALayerTree() on the view's own layer, as the tvOS port does.
+   std::unique_ptr<ui::DisplayCALayerTree> display_tree_;
++  // [ios-blink-sideload] Updates the screen info when the display changes, as
++  // on a rotation, and not only when the view lays out: the display may change
++  // after that.
++  display::ScopedOptionalDisplayObserver display_observer_{this};
+   base::WeakPtrFactory<RenderWidgetHostViewIOS> weak_factory_{this};
+ };
+ 
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index f58bc11361e8523799938beb58304cb10c9edc98..65581bca426dda51419bd7343ca2cb735475b5fb 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -402,7 +402,17 @@ bool IsTesting() {
+   host()->SynchronizeVisualProperties();
+ }
+ 
+-void RenderWidgetHostViewIOS::UpdateBackgroundColor() {}
++void RenderWidgetHostViewIOS::UpdateBackgroundColor() {
++  // [ios-blink-sideload] As the Mac does: where the view has no frame of the
++  // page yet (before a page's first frame, while a resize is pending), show
++  // the page's background color.
++  std::optional<SkColor> color = GetBackgroundColor();
++  if (!color) {
++    return;
++  }
++  browser_compositor_->SetBackgroundColor(
++      *color == SK_ColorTRANSPARENT ? SK_ColorWHITE : *color);
++}
+ 
+ void RenderWidgetHostViewIOS::
+     RequestSuccessfulPresentationTimeFromHostOrDelegate(
+@@ -489,6 +499,15 @@ bool IsTesting() {
+   }
+ }
+ 
++void RenderWidgetHostViewIOS::OnDisplayMetricsChanged(
++    const display::Display& display,
++    uint32_t changed_metrics) {
++  // [ios-blink-sideload] See `display_observer_`.
++  if (host()) {
++    UpdateScreenInfo();
++  }
++}
++
+ void RenderWidgetHostViewIOS::OnSynchronizedDisplayPropertiesChanged(
+     bool rotation) {
+   host()->SynchronizeVisualProperties();
+@@ -971,15 +990,19 @@ bool IsTesting() {
+ }
+ 
+ void RenderWidgetHostViewIOS::UpdateFrameBounds() {
+-  const gfx::PointF scrollOffset =
+-      last_root_scroll_offset_.value_or(gfx::PointF());
+   UIScrollView* scrollView = (UIScrollView*)[ui_view_->view_ superview];
++  // [ios-blink-sideload] Place the view where the scroll view shows it, at its
++  // contentOffset, instead of at the page's last scroll offset: the two are
++  // the same (ApplyRootScrollOffsetChanged()) until UIKit or Chrome moves the
++  // scroll view. After a rotation it was 42 points off, and the page was
++  // drawn that far below the toolbar, over the scroll view's gray background.
++  const CGPoint scrollOffset = [scrollView contentOffset];
+   const CGRect parentBounds = [scrollView bounds];
+   const UIEdgeInsets parentInset = [scrollView contentInset];
+ 
+   CGRect frameBounds = UIEdgeInsetsInsetRect(parentBounds, parentInset);
+-  frameBounds.origin = CGPointMake(scrollOffset.x() + parentInset.left,
+-                                   scrollOffset.y() + parentInset.top);
++  frameBounds.origin = CGPointMake(scrollOffset.x + parentInset.left,
++                                   scrollOffset.y + parentInset.top);
+ 
+   // If we are scrolling we don't resize the WebView immediately.
+   if (!is_scrolling_ && !IsTesting()) {
+@@ -1019,6 +1042,11 @@ bool IsTesting() {
+   ApplyRootScrollOffsetChanged(root_scroll_offset, /*force=*/false);
+ }
+ 
++void RenderWidgetHostViewIOS::ContentOffsetChanged() {
++  // [ios-blink-sideload] See UpdateFrameBounds().
++  UpdateFrameBounds();
++}
++
+ void RenderWidgetHostViewIOS::ContentInsetChanged() {
+   if (last_root_scroll_offset_) {
+     ApplyRootScrollOffsetChanged(*last_root_scroll_offset_, /*force=*/true);
+@@ -1181,9 +1209,18 @@ bool IsTesting() {
+ }
+ 
+ gfx::Size RenderWidgetHostViewIOS::GetCompositorViewportPixelSize() {
+-  return gfx::ScaleToCeiledSize(
+-      IsTesting() ? GetRequestedRendererSize() : GetScreenInfo().rect.size(),
+-      GetDeviceScaleFactor());
++  // [ios-blink-sideload] The size the browser compositor shows the page's
++  // surface at, as on the Mac, instead of the screen's: a new surface id comes
++  // with every change of that size (BrowserCompositorIOS::
++  // UpdateSurfaceFromUIView()), not with one of the screen's. After a rotation
++  // the page drew frames of the new screen size into its old surface (a DCHECK
++  // in the simulator, a cropped page next to a red area on a phone), and a page
++  // that started while the screen info was stale only covered part of the
++  // view.
++  return gfx::ScaleToCeiledSize(IsTesting()
++                                    ? GetRequestedRendererSize()
++                                    : browser_compositor_->GetRendererSize(),
++                                GetDeviceScaleFactor());
+ }
+ 
+ void RenderWidgetHostViewIOS::ComputeDisplayFeature() {
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index d1ccf08a691341e5dccd9c3dfc75485aeb38ad16..aff5a86fa346563b542bba9a2acc787f1ae3eda3 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -19,6 +19,8 @@
+ #include "ui/base/l10n/l10n_util_mac.h"
+ 
+ static void* kObservingContext = &kObservingContext;
++// [ios-blink-sideload] KVO context for the scroll view's contentOffset.
++static void* kContentOffsetContext = &kContentOffsetContext;
+ 
+ namespace {
+ NSString* const kPreviousAccessoryImageName = @"chevron.up";
+@@ -391,6 +393,8 @@ - (void)observeValueForKeyPath:(NSString*)keyPath
+   CHECK(_view);
+   if (context == kObservingContext) {
+     _view->ContentInsetChanged();
++  } else if (context == kContentOffsetContext) {
++    _view->ContentOffsetChanged();
+   } else {
+     [super observeValueForKeyPath:keyPath
+                          ofObject:object
+@@ -407,6 +411,9 @@ - (void)removeView {
+   UIScrollView* view = (UIScrollView*)[self superview];
+   [view removeObserver:self
+             forKeyPath:NSStringFromSelector(@selector(contentInset))];
++  [view removeObserver:self
++            forKeyPath:NSStringFromSelector(@selector(contentOffset))
++               context:kContentOffsetContext];
+   [self removeFromSuperview];
+ }
+ 
+@@ -486,6 +493,11 @@ - (void)updateView:(UIScrollView*)view {
+          forKeyPath:NSStringFromSelector(@selector(contentInset))
+             options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionOld
+             context:kObservingContext];
++  // [ios-blink-sideload] See RenderWidgetHostViewIOS::ContentOffsetChanged().
++  [view addObserver:self
++         forKeyPath:NSStringFromSelector(@selector(contentOffset))
++            options:0
++            context:kContentOffsetContext];
+ }
+ 
+ - (BOOL)isEditable {
+diff --git a/ui/display/ios/screen_ios.mm b/ui/display/ios/screen_ios.mm
+index ab9f46a5e07f06d6437c9d85fb6431b1116cf624..e142c002e08c3fe9bdc6bf557aab56a43d3185b6 100644
+--- a/ui/display/ios/screen_ios.mm
++++ b/ui/display/ios/screen_ios.mm
+@@ -24,8 +24,15 @@
+ }  // namespace
+ }  // namespace display
+ 
++namespace {
++// [ios-blink-sideload] KVO context for UIWindowScene's effectiveGeometry.
++void* kEffectiveGeometryContext = &kEffectiveGeometryContext;
++}  // namespace
++
+ @interface ScreenObserver : NSObject {
+   raw_ptr<display::ScreenNotification, DanglingUntriaged> _notifier;
++  // [ios-blink-sideload] The window scenes whose effectiveGeometry is observed.
++  NSMutableSet<UIWindowScene*>* _observedScenes;
+ }
+ - (void)mainScreenChanged;
+ @end
+@@ -46,11 +53,80 @@ - (instancetype)initWithNotifier:(display::ScreenNotification*)notifier {
+                       selector:@selector(mainScreenChanged)
+                           name:UIWindowDidBecomeKeyNotification
+                         object:nil];
++#if !BUILDFLAG(IS_IOS_TVOS) && !BUILDFLAG(IS_IOS_APP_EXTENSION)
++    // [ios-blink-sideload] The device's orientation changes before the
++    // interface rotates, and the task posted for it ran before the scene had
++    // its new size: the display kept the previous orientation's size until
++    // the next rotation. Apple's way to follow rotations is to observe the
++    // scene's effectiveGeometry.
++    _observedScenes = [NSMutableSet set];
++    [defaultCenter addObserver:self
++                      selector:@selector(sceneWillConnect:)
++                          name:UISceneWillConnectNotification
++                        object:nil];
++    [defaultCenter addObserver:self
++                      selector:@selector(sceneDidDisconnect:)
++                          name:UISceneDidDisconnectNotification
++                        object:nil];
++    for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
++      [self observeScene:scene];
++    }
++#endif
+   }
+ 
+   return self;
+ }
+ 
++- (void)dealloc {
++  for (UIWindowScene* scene in _observedScenes) {
++    [scene removeObserver:self
++               forKeyPath:@"effectiveGeometry"
++                  context:kEffectiveGeometryContext];
++  }
++}
++
++- (void)observeScene:(UIScene*)scene {
++  UIWindowScene* windowScene = base::apple::ObjCCast<UIWindowScene>(scene);
++  if (!windowScene || [_observedScenes containsObject:windowScene]) {
++    return;
++  }
++  [_observedScenes addObject:windowScene];
++  [windowScene addObserver:self
++                forKeyPath:@"effectiveGeometry"
++                   options:0
++                   context:kEffectiveGeometryContext];
++}
++
++- (void)sceneWillConnect:(NSNotification*)notification {
++  [self observeScene:notification.object];
++}
++
++- (void)sceneDidDisconnect:(NSNotification*)notification {
++  UIWindowScene* windowScene =
++      base::apple::ObjCCast<UIWindowScene>(notification.object);
++  if (!windowScene || ![_observedScenes containsObject:windowScene]) {
++    return;
++  }
++  [windowScene removeObserver:self
++                   forKeyPath:@"effectiveGeometry"
++                      context:kEffectiveGeometryContext];
++  [_observedScenes removeObject:windowScene];
++}
++
++- (void)observeValueForKeyPath:(NSString*)keyPath
++                      ofObject:(id)object
++                        change:(NSDictionary*)change
++                       context:(void*)context {
++  if (context == kEffectiveGeometryContext) {
++    [self mainScreenChanged];
++    return;
++  }
++  [super observeValueForKeyPath:keyPath
++                       ofObject:object
++                         change:change
++                        context:context];
++}
++
+ - (void)mainScreenChanged {
+   if (!base::SingleThreadTaskRunner::HasCurrentDefault()) {
+     return;
+@@ -85,6 +161,32 @@ - (void)mainScreenChanged {
+ #endif
+ }
+ 
++#if !BUILDFLAG(IS_IOS_TVOS)
++// [ios-blink-sideload] The application's window scene, preferably the active
++// one, whose interface orientation the display follows.
++UIWindowScene* GetActiveWindowScene() {
++#if BUILDFLAG(IS_IOS_APP_EXTENSION)
++  return nil;
++#else
++  UIWindowScene* first_scene = nil;
++  for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
++    auto* window_scene = base::apple::ObjCCast<UIWindowScene>(scene);
++    if (!window_scene || !window_scene.windows.count) {
++      continue;
++    }
++    if (window_scene.activationState ==
++        UISceneActivationStateForegroundActive) {
++      return window_scene;
++    }
++    if (!first_scene) {
++      first_scene = window_scene;
++    }
++  }
++  return first_scene;
++#endif
++}
++#endif  // !BUILDFLAG(IS_IOS_TVOS)
++
+ class ScreenIos : public ScreenBase, public ScreenNotification {
+  public:
+   ScreenIos() {
+@@ -101,8 +203,61 @@ void ScreenChanged() override {
+       return;
+     }
+ 
++    CGRect bounds = screen.bounds;
++#if !BUILDFLAG(IS_IOS_TVOS)
++    Display::Rotation rotation = Display::ROTATE_0;
++    // [ios-blink-sideload] Follow the interface's orientation, with the bounds
++    // that go with it, instead of the device's orientation and UIScreen's
++    // bounds: they change at different times during a rotation (the page was
++    // told "portrait-secondary" with portrait bounds in landscape), and the
++    // device may face a way the interface doesn't turn to.
++    if (UIWindowScene* window_scene = GetActiveWindowScene()) {
++      UIInterfaceOrientation orientation =
++          window_scene.effectiveGeometry.interfaceOrientation;
++      switch (orientation) {
++        case UIInterfaceOrientationPortraitUpsideDown:
++          rotation = Display::ROTATE_180;
++          break;
++        // The device turned left (UIDeviceOrientationLandscapeLeft).
++        case UIInterfaceOrientationLandscapeRight:
++          rotation = Display::ROTATE_90;
++          break;
++        case UIInterfaceOrientationLandscapeLeft:
++          rotation = Display::ROTATE_270;
++          break;
++        default:
++          rotation = Display::ROTATE_0;
++          break;
++      }
++      // The screen's bounds in portrait, turned like the interface.
++      CGSize size = screen.fixedCoordinateSpace.bounds.size;
++      if (UIInterfaceOrientationIsLandscape(orientation)) {
++        size = CGSizeMake(size.height, size.width);
++      }
++      bounds = CGRectMake(0, 0, size.width, size.height);
++    } else {
++      switch (UIDevice.currentDevice.orientation) {
++        case UIDeviceOrientationPortrait:
++        case UIDeviceOrientationFaceUp:
++        case UIDeviceOrientationFaceDown:
++        case UIDeviceOrientationUnknown:
++          rotation = Display::ROTATE_0;
++          break;
++        case UIDeviceOrientationPortraitUpsideDown:
++          rotation = Display::ROTATE_180;
++          break;
++        case UIDeviceOrientationLandscapeLeft:
++          rotation = Display::ROTATE_90;
++          break;
++        case UIDeviceOrientationLandscapeRight:
++          rotation = Display::ROTATE_270;
++          break;
++      }
++    }
++#endif
++
+     const int64_t display_id = 0;
+-    Display display(display_id, gfx::Rect(screen.bounds));
++    Display display(display_id, gfx::Rect(bounds));
+     CGFloat scale = [screen scale];
+ 
+     if (Display::HasForceDeviceScaleFactor()) {
+@@ -111,24 +266,6 @@ void ScreenChanged() override {
+     display.set_device_scale_factor(scale);
+ 
+ #if !BUILDFLAG(IS_IOS_TVOS)
+-    Display::Rotation rotation = Display::ROTATE_0;
+-    switch (UIDevice.currentDevice.orientation) {
+-      case UIDeviceOrientationPortrait:
+-      case UIDeviceOrientationFaceUp:
+-      case UIDeviceOrientationFaceDown:
+-      case UIDeviceOrientationUnknown:
+-        rotation = Display::ROTATE_0;
+-        break;
+-      case UIDeviceOrientationPortraitUpsideDown:
+-        rotation = Display::ROTATE_180;
+-        break;
+-      case UIDeviceOrientationLandscapeLeft:
+-        rotation = Display::ROTATE_90;
+-        break;
+-      case UIDeviceOrientationLandscapeRight:
+-        rotation = Display::ROTATE_270;
+-        break;
+-    }
+     display.set_rotation(rotation);
+     display.set_touch_support(Display::TouchSupport::AVAILABLE);
+     display.set_accelerometer_support(Display::AccelerometerSupport::AVAILABLE);
+-- 
+2.54.0 (Apple Git-157)
+

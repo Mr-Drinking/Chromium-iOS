@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 14:02:32 +0800
+Subject: [PATCH] iOS sideload: report invariants without crashing on devices
+
+Outside official builds, base turns every DUMP_WILL_BE_CHECK(),
+DUMP_WILL_BE_NOTREACHED() and CHECK(..., base::NotFatalUntil::M<later>)
+into a crash, to catch the invariants they guard in testing. Chrome
+ships official builds, where they only report. The sideloaded app is a
+user-facing build that isn't official, so on a phone each of them
+killed the app: every time the app was closed (from the app switcher,
+or by the system while it was in the background), ~BrowserContextImpl()
+found the in-process renderer's RenderProcessHost still referring to
+the profile and crashed (two crash reports from an iPhone 13 mini on
+iOS 27.2, both in -applicationWillTerminate:).
+
+Use the official builds' severity on iOS: DCHECK when DCHECKs are on
+(the simulator build, which keeps crashing on them), an error report
+otherwise (the device build).
+
+Status: the crash checked against both reports at Chromium 3313f827: the
+abort comes from line 148 of browser_context_impl.cc (the Location the
+device build's code passes there), the DUMP_WILL_BE_NOTREACHED() above.
+Builds for the simulator and a device compile; the simulator build,
+with DCHECKs, still crashes on these checks. Not checked on a device.
+
+diff --git a/base/check.cc b/base/check.cc
+index f935dbad049bd60e39ebe19f1beb485339f4fc43..a2f380b31e38b001677d0d878440d9d4ee2f76c6 100644
+--- a/base/check.cc
++++ b/base/check.cc
+@@ -60,7 +60,13 @@ constexpr char kCheckFailureMessageSeparator[] =
+     ;
+ 
+ LogSeverity GetDumpSeverity() {
+-#if defined(OFFICIAL_BUILD)
++#if defined(OFFICIAL_BUILD) || BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] The sideloaded app is a user-facing build that isn't
++  // an official one: report and go on, as Chrome does, instead of crashing on
++  // invariants Chrome only reports. The app crashed every time it was closed
++  // (DUMP_WILL_BE_NOTREACHED() in ~BrowserContextImpl(): the in-process
++  // renderer's host outlives the profile). Builds with DCHECKs, such as the
++  // simulator's, still crash.
+   return DCHECK_IS_ON() ? LOGGING_DCHECK : LOGGING_ERROR;
+ #else
+   // Crash outside official builds (outside user-facing builds) to detect
+-- 
+2.54.0 (Apple Git-157)
+
