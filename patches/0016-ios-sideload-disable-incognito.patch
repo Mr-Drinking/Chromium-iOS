@@ -52,7 +52,7 @@ index 160f09ddcc32c5f4e50eda2c4976d6feb598a589..494cdf984740b8cf0fcbecbdc0320755
  
  - (UIAction*)actionToOpenInNewWindowWithURL:(const GURL&)URL
 diff --git a/ios/chrome/browser/policy/model/BUILD.gn b/ios/chrome/browser/policy/model/BUILD.gn
-index b00273b1b7c1078f3210b377723db8eee48d5d86..b4a104e3cb599e95d3aeef722f05381887ededb3 100644
+index 56713a919bdeea15dd7d0cecb12f09cdd648f538..dd5235f61cf0dd6d591379110405a3a8d7a2cf64 100644
 --- a/ios/chrome/browser/policy/model/BUILD.gn
 +++ b/ios/chrome/browser/policy/model/BUILD.gn
 @@ -252,6 +252,7 @@ source_set("policy_util") {

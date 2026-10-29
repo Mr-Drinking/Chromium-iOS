@@ -1,6 +1,6 @@
 # 结构与补丁说明
 
-以下路径都相对于 Chromium 的 `src/`。分析是在 `d586be9f`（158.0.8125.0）上做的；固定版本后来升到 `4558926c`（158.0.8127.0）。两者之间，补丁涉及的文件只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 有变化：上游新加了一个和补丁无关的 `ClearFocusedElement()`（验证过）。
+以下路径都相对于 Chromium 的 `src/`。分析是在 `d586be9f`（158.0.8125.0）上做的；固定版本后来升到 `4558926c`（158.0.8127.0）。两者之间，补丁涉及的文件只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 有变化：上游新加了一个和补丁无关的 `ClearFocusedElement()`（验证过）。2026-10-29 再升到 `3313f827`（159.0.8129.0）：补丁内容都没变，只有 0023 要重新对上几行上下文：上游 2026-10-27 让竖线光标的宽度不受元素变换影响（`623986716f`），在 `caret_display_item_client.cc` 开头加了几个 include；V8 补丁 0201 上游已经修好，删掉了（见第 3 节；验证过）。
 
 ## 1. Chrome iOS 怎么换成 Blink 内核
 
@@ -285,14 +285,16 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 
 模拟器里验证过（2026-10-28，和同一台模拟器里的 Safari 在同样的页面上对比截图、逐帧看录屏）：脚本选中的三行文字，前两行都延伸到右边缘，和 Safari 一样；拖柄圆点 47 像素，和 Safari 一样（之前 31 像素）；长按选中词后，手指按着时显示放大镜，松手后才弹出编辑菜单；按着不松再移动，选区扩展到下一行；挂上调试器看到：长按选中时振一次，按着拖动或拖拖柄时选区每变一次振一次，在空输入框里长按时也振一次（松手后菜单里有"粘贴"）；长按链接照常弹出 Chrome 的链接菜单，不显示放大镜、不振。模拟器里感觉不到振动，真机待确认。
 
-### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`）
+### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`，159 上已删）
+
+**升到 159 后不再需要，已经删掉。** 上游 2026-10-27 自己修了下面这两处（V8 `c8b70908`「Fix build break after TrustedCast and raw() hardening」、`d1204af1`「Fix build break after SharedFunctionInfo flags move」），159 的 V8（`0388bc74`）不打补丁，DrumBrake 在模拟器和真机两种配置下都编得过，模拟器里的测试页结果正常（2026-10-29 验证过）。下面是 158 时的记录。
 
 上游 CI 不编 DrumBrake，它就没跟上 V8 的两次接口改动（V8 2026-10-27 的 main 上这三个文件和固定版本一模一样，验证过）：
 
 - `TrustedManaged<T>::raw()` 现在要传一个 `DisallowGarbageCollection&`。句柄（`DirectHandle`）保活、中间可能触发 GC 的地方（`Execute()` 等）改用 `unsafe_raw()`，上游别处（`wasm-objects-inl.h`）也是这么用的；只拿 `Tagged` 指针、不会 GC 的两处（`GetInterpretedStack()`、`GetFunctionIndex()`）开一个 `DisallowGarbageCollection` 再调 `raw(no_gc)`。
 - `TrustedCast<T>` 现在只接受受信任类型。DrumBrake 拿它转 `WasmTableObject`、`WasmArray`、`Map`、`HeapObject` 等普通堆对象，一共 25 处，都改成 `Cast<T>`。两者都只在 DCHECK 里检查类型，行为不变；上游别处转同样的对象也用 `Cast<T>`（如 `runtime-wasm.cc`、`constant-expression-interface.cc`）。
 
-补丁放在 `patches/v8/`，`series` 里写成 `src/v8:v8/0201-….patch`，打在 `src/v8` 的同名分支上，基准是 `src/DEPS` 里的 `v8_revision`。DrumBrake 不支持新版异常处理（`try_table`/`throw_ref`）：免 JIT 时 V8 直接拒绝这种模块，网页拿到的是 `CompileError`，不会崩溃（`function-body-decoder-impl.h`）；旧版 `try`/`catch` 可以用。
+补丁当时放在 `patches/v8/`，`series` 里写成 `src/v8:v8/0201-….patch`，打在 `src/v8` 的同名分支上，基准是 `src/DEPS` 里的 `v8_revision`（以后再有 V8 补丁也这样放）。DrumBrake 不支持新版异常处理（`try_table`/`throw_ref`）：免 JIT 时 V8 直接拒绝这种模块，网页拿到的是 `CompileError`，不会崩溃（`function-body-decoder-impl.h`）；旧版 `try`/`catch` 可以用。
 
 模拟器里验证过（`v8_drumbrake_bounds_checks = true` 加 `--wasm-jitless`）：自己写的测试页覆盖算术、内存、表、尾调用、异常（含 `WebAssembly.JSTag`）、GC 结构和数组、SIMD，以及两个用 clang 编成 wasm32 的 C 程序，17 项全部通过；`try_table` 模块报 `CompileError`。速度：C 写的 SHA-256 和 Mandelbrot 比 JIT（Mac 上的 Chromium）慢 4–6 倍，`fib(25)` 和免 JIT 的 JS 差不多（9 ms 对 10 ms）。
 
@@ -309,7 +311,7 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 | `ios_enable_code_signing = false`（真机） | 产出未签名的 .app，由侧载工具用你的 Apple ID 签 |
 | `ios_enable_*_extension = false` 等 8 项 | 关掉 Chrome 自带的分享、小组件、密码填充等扩展；侧载时每个扩展都要占一个 App ID |
 | `v8_enable_sandbox = false`，`cppgc_enable_caged_heap = false` | 两者都要预留很大的虚拟地址空间，侧载 app 未必有 extended-virtual-addressing（Blinker Fluid 在真机上用的就是这组） |
-| `v8_enable_drumbrake = true` | 免 JIT 时 WebAssembly 靠 DrumBrake 解释器跑，tvOS 也是这么配的。DrumBrake 在固定版本的 V8 上编不过，V8 补丁 0201 修好了（见第 3 节） |
+| `v8_enable_drumbrake = true` | 免 JIT 时 WebAssembly 靠 DrumBrake 解释器跑，tvOS 也是这么配的。上游 CI 不编 DrumBrake：158 的 V8 上要靠 V8 补丁 0201 才编得过，159 的 V8 上游已经修好（见第 3 节） |
 | `v8_drumbrake_bounds_checks = true` | Wasm 内存访问做显式边界检查。iOS arm64 默认不做，改用 Wasm 内存四周 8 GB 的保护区加 V8 的陷阱处理器来发现越界。但 content 在 iOS 上默认不开陷阱处理器（`features::kWebAssemblyTrapHandler`），这时 DrumBrake 在第一次实例化模块时就 `CHECK` 崩溃（`wasm-interpreter.cc`），而每块 Wasm 内存预留 8 GB 地址空间，侧载 app 也未必给得起。显式检查两样都不需要，代价是访存稍慢 |
 
 `v8/gni/v8.gni` 里 tvOS（"runs in single process mode and is not allowed to use JIT"）的配置还有 `v8_enable_lite_mode = true`、`v8_enable_turbofan = false`。我们没开：它们能让包更小，但以后想加 JIT 就得重新编。如果内存吃紧可以试。

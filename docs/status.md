@@ -1,6 +1,6 @@
 # 进度与待验证事项
 
-最后更新：2026-10-29（Mac：补丁 0001–0027 和 V8 补丁 0201 在模拟器里验证过，WebAssembly、翻译、系统代理、滚动、滑到底、下载、文本选择（拖柄和 Safari 同款的编辑菜单，系统蓝的光标和选区，整块的多行选区、长按放大镜和振动，空输入框能粘贴）、深色模式、屏幕键盘、页内查找、请求桌面版网站、网站权限（定位、剪贴板、摄像头）都正常，无痕模式停用；最新的真机包是 Release `chromium-158.0.8127.0-sideload-7`（公开，预发布，含 0001–0027），还没在真机上测。用户在真机上测过 Release 3、4、6，反馈见"真机反馈的问题"第 16–27 条；第 22–27 条的修正都在测试版 7 里，待真机确认。Release 2 是 0001–0007 的真机包）。
+最后更新：2026-10-29（Mac：升级到 159.0.8129.0（`3313f827`），V8 补丁 0201 不再需要。补丁 0001–0027 在 159 的模拟器里逐项回归过，WebAssembly、翻译、系统代理、滚动、滑到底、下载、文本选择（拖柄和 Safari 同款的编辑菜单，系统蓝的光标和选区，整块的多行选区、长按放大镜，空输入框能粘贴）、深色模式、屏幕键盘、页内查找、请求桌面版网站、网站权限（定位、剪贴板、摄像头）都正常，无痕模式停用；振动在 158 上用调试器确认过调用，159 上没重测。最新的真机包是 `dist/Chromium-159.0.8129.0-sideload.ipa`（含 0001–0027），准备发布为正式版，还没在真机上测。用户在真机上测过 158 的 Release 3、4、6，反馈见"真机反馈的问题"第 16–27 条；第 22–27 条的修正在测试版 7 里就有，待真机确认。Release 2 是 0001–0007 的真机包）。
 
 **每完成一步、每确认或推翻一条假设，都更新这个文件。** 它是项目的唯一进度记录。
 
@@ -8,16 +8,18 @@
 
 | 项 | 值 | 依据 |
 |---|---|---|
-| Chromium | `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0，main@{#1726971}，2026-10-26） | 官方 `ios-blink-rel-fyi` CI 第 42241 次构建（ID 8666871797155972657）通过 |
-| V8 | `f7be3c62b2a158365e646b8dd4ed8cb61c072cae` | 上面提交的 DEPS |
-| ANGLE | `ab90d2a96dea191f14a96d4b2c16b5a50ee73317` | 同上 |
+| Chromium | `3313f82787695ce167d13fb795a435d3019af3f6`（159.0.8129.0，main@{#1729023}，2026-10-28） | 官方 `ios-blink-rel-fyi` CI 第 42447 次构建（ID 8666696698874083665）编译通过；测试只挂了 5 个 components_unittests 的 Autofill 用例（2026-10-27 新启用或新加，没写进 use_blink 的测试过滤表，和 Blink 无关） |
+| V8 | `0388bc748b2dca51a4e30c10319a111bdb58212b` | 上面提交的 DEPS |
+| ANGLE | `61188387793ec88423e9cf7cd2b39852533b7855` | 同上 |
 | CI 用的 Xcode | 27a266a（Xcode 27） | 该 builder 的 `properties.json` |
 | CI 编译目标 | `all`（`use_blink=true`，模拟器 Release） | 该 builder 的 `targets/chromium.fyi.json` |
 | CI 跑测试的模拟器 | iPhone 16 / iOS 27.0 | 同上 |
 | 用 Blink 时的最低 iOS | 26.0（`build/config/ios/ios_sdk_overrides.gni`） | 源码 |
 | Xcode 最低要求 | 26.0（`ios/build/chrome_build.gni` 里的 assert） | 源码 |
 
-2026-10-26 应用户要求，从 `d586be9f`（158.0.8125.0，main@{#1726673}，CI 构建 ID 8666930859126518865）升到这里，中间相差 298 个提交。以下都验证过：这个 builder 的 `gn-args.json`、`properties.json`、`targets/chromium.fyi.json` 新旧两版完全一样；表里其余几行引用的源码文件也没变。补丁涉及的文件里，只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 变了（上游加了一个和补丁无关的 `ClearFocusedElement()`）。全部补丁（含可选的）在新版本的这些文件上用 `git am --3way` 都能干净打上。
+2026-10-29 应用户要求（"升级到 8129"），从 `4558926c`（158.0.8127.0，main@{#1726971}，CI 构建 ID 8666871797155972657）升到这里，中间相差 2052 个提交。以下都验证过：这个 builder 的 `gn-args.json`、`properties.json`、`targets/chromium.fyi.json` 新旧两版完全一样；表里其余几行引用的源码文件也没变。补丁内容都没变：0023 要重新对上几行上下文（上游在 `caret_display_item_client.cc` 开头加了 include），0005、0016 只是行号变了，可选补丁也能打上；V8 补丁 0201 不再需要（上游 2026-10-27 修好了 DrumBrake 的编译），删掉了。全量重编没有碰到 API 漂移。
+
+更早一次：2026-10-26 应用户要求，从 `d586be9f`（158.0.8125.0，main@{#1726673}，CI 构建 ID 8666930859126518865）升到 `4558926c`，中间相差 298 个提交。以下都验证过：这个 builder 的 `gn-args.json`、`properties.json`、`targets/chromium.fyi.json` 新旧两版完全一样；表里其余几行引用的源码文件也没变。补丁涉及的文件里，只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 变了（上游加了一个和补丁无关的 `ClearFocusedElement()`）。全部补丁（含可选的）在新版本的这些文件上用 `git am --3way` 都能干净打上。
 
 ## 本机环境（2026-10-26 验证过）
 
@@ -42,7 +44,7 @@
 | 4 | Passkey 不支持 | **不做**（用户 2026-10-27 决定放弃）。读源码确认：Chromium 的通行密钥实现（iCloud 钥匙串）只在 Mac 上编译（`device/fido/BUILD.gn` 里的 `is_mac`），还要求苹果授予的 `com.apple.developer.web-browser.public-key-credential` 权限（`device/fido/mac/icloud_keychain_sys.mm`）。iOS 的 Blink 版没有这部分实现，侧载 app 也拿不到这个权限 |
 | 5 | 偶尔冒出一行 Times 小字 "This is an error page." | **已修**（补丁 0006，模拟器验证过）。顺带修了一个无障碍崩溃（补丁 0007） |
 | 6 | 滚动条拖不动，样式和原版不一样 | **暂缓**（用户说优先级低）。读源码确认：网页外面那层 `UIScrollView` 只是个镜像，滚动被禁用、手势识别器全被移除（`render_widget_host_view_ios_uiview.mm` 的 `-updateView:`），滚动由 Blink 处理。滚动条是 Blink 画的移动版叠加滚动条，不响应触摸。要换成原生、可拖动的指示条，得隐藏 Blink 的滚动条、显示 UIKit 的，再把拖动转成 Blink 的滚动，不是小改动 |
-| 7 | 没有 WebAssembly | **已修**（V8 补丁 0201 + 0001 的 `--wasm-jitless` + `args/` 开 DrumBrake 并做显式边界检查，模拟器验证过）：测试页 17 项全过，速度和免 JIT 的 JS 相当，比 JIT 慢 4–6 倍；新式异常处理（`try_table`）的模块会报 `CompileError` |
+| 7 | 没有 WebAssembly | **已修**（V8 补丁 0201 + 0001 的 `--wasm-jitless` + `args/` 开 DrumBrake 并做显式边界检查，模拟器验证过；159 起上游修好了 DrumBrake 的编译，不再需要 0201）：测试页 17 项全过，速度和免 JIT 的 JS 相当，比 JIT 慢 4–6 倍；新式异常处理（`try_table`）的模块会报 `CompileError` |
 | 8 | 想要网页翻译（用户 2026-10-27 提出） | **已修**（补丁 0008，模拟器验证过）：德语网页会弹出翻译提示，翻译后是中文。需要连得上 Google |
 | 9 | （测试时发现）Blink 版网页请求不走系统代理设置 | **已修**（补丁 0009，模拟器验证过），见风险 15 |
 | 10 | （测试时发现）google.com 只给旧版基础页面 | **已修**（补丁 0010，模拟器验证过）：UA 里的 iOS 版本由 14_0 改成 18_7 |
@@ -110,7 +112,7 @@
 10. **Google 账号。** Chromium 构建没有 Google API key 和内部组件，登录/同步、Discover、Lens 等大概率不可用。
 11. **`DEVELOPER_DIR` 能不能传到构建的每一步。**（2026-10-27：能，验证过。系统 `xcode-select` 指向 CLT 的情况下，模拟器版完整编译成功，包括 actool 等 Xcode 工具步骤。） `xcode-select -p`、`xcodebuild`、`xcrun` 都认它（验证过）；gn 生成时的 SDK 探测、siso 在本地执行的 actool/ibtool 等动作是否都继承这个环境变量，还没验证。如果编译时报找不到 Xcode 工具或 SDK，先在 Chromium 的 `src` 里 `git grep DEVELOPER_DIR build/` 看构建怎么处理它；临时改 `xcode-select` 是最后手段，要先问用户。
 12. **本机 Xcode 27.1 比 CI 的 27.0 新。**（2026-10-27：模拟器版编译没有因此出错，验证过。） SDK 小版本不同可能带来少量编译错误。推测概率不高：新版本 SDK 里新加的弃用标记，只有部署目标不低于弃用版本时才会报警告，而这里的部署目标是 26.0。
-13. **免 JIT 时没有 WebAssembly。**（2026-10-27 已修，见 V8 补丁 0201 和日志。）V8 的 Wasm 解释器 DrumBrake 在固定版本的 V8（`f7be3c62`）上编不过，V8 2026-10-26 的 main（`3c21887f`）、2026-10-27 的 main 也一样（验证过）。原因是上游改了接口，DrumBrake 没跟上：`TrustedManaged<T>::raw()` 现在要求传 `DisallowGarbageCollection&`，`TrustedCast<T>` 只允许受信任类型，DrumBrake 却用来转 `Map`、`WasmArray` 等普通对象。上游 CI 显然没编它。V8 补丁 0201 修好了编译；两份 `args/` 开了 `v8_enable_drumbrake` 和 `v8_drumbrake_bounds_checks`，0001 传 `--wasm-jitless`。
+13. **免 JIT 时没有 WebAssembly。**（2026-10-27 已修，见 V8 补丁 0201 和日志。2026-10-29：159 的 V8（`0388bc74`）里上游已经修好，不打补丁也编得过、跑得通，0201 删了，验证过。）V8 的 Wasm 解释器 DrumBrake 在固定版本的 V8（`f7be3c62`）上编不过，V8 2026-10-26 的 main（`3c21887f`）、2026-10-27 的 main 也一样（验证过）。原因是上游改了接口，DrumBrake 没跟上：`TrustedManaged<T>::raw()` 现在要求传 `DisallowGarbageCollection&`，`TrustedCast<T>` 只允许受信任类型，DrumBrake 却用来转 `Map`、`WasmArray` 等普通对象。上游 CI 显然没编它。V8 补丁 0201 修好了编译；两份 `args/` 开了 `v8_enable_drumbrake` 和 `v8_drumbrake_bounds_checks`，0001 传 `--wasm-jitless`。
 14. **模拟器机型受限。**（2026-10-27 更新：本机另有一个 iOS 27.0 运行时，支持 iPhone 11 到 18 系列，包括 13 mini，`04-run-simulator.sh` 现在会自动挑支持所选机型的运行时；之后的测试都在 "iPhone 13 mini" 上做。）本机 Xcode 27.1 的 iOS 27.1 模拟器运行时只支持 "iPhone Duo" 一种 iPhone（验证过），CI 用的 iPhone 16 和用户手上的 13 mini 都建不出来（"Incompatible device"）。Xcode 27 不再带 Simulator.app，模拟器窗口换成了 `Xcode.app/Contents/Applications/DeviceHub.app`（`com.apple.dt.Devices`，验证过；`04-run-simulator.sh` 会按路径打开它）。要在 13 mini 的屏幕尺寸上测，得另装一个支持它的模拟器运行时（几 GB，要先问用户）。
 15. **网页请求不走系统代理设置。**（2026-10-27 补充：补丁 0009 用的 `ProxyConfigServiceIOS` 在 iOS 上只能轮询，每 10 秒、而且要有请求时才重读；补丁 0018 加上了网络变化通知，开关 VPN 后立刻重读。）（2026-10-27，读源码确认，模拟器里也看到了现象。）Blink 版的网页请求走 content 的网络服务，ios/web 没给它传代理设置，于是它退回直连（`services/network/network_context.cc` 里的 `CreateDirect()`）。所以 iOS 里给 Wi-Fi 配的 HTTP 代理、PAC 对网页无效；Clash 等 VPN 型代理（虚拟网卡）对所有流量生效，不受影响。模拟器里同理：Mac 的系统代理不起作用，google.com 打不开，只能开代理软件的虚拟网卡（TUN）模式。**补丁 0009 已修**：iOS 上改读系统代理设置（`ProxyConfigServiceIOS`），之后模拟器里的 Chromium 直接走 Mac 的系统代理（验证过）。
 16. **单进程只支持一个浏览器上下文，所以没有无痕模式。**（2026-10-27，读源码确认，模拟器里复现了。）content 的单进程模式只有一个进程内渲染器，`RenderProcessHostImpl::IsSuitableHost` 在单进程时只用 DCHECK 检查浏览器上下文是否一致。无痕模式要用第二个浏览器上下文：模拟器配置开着 DCHECK，一打开无痕标签页就崩；真机配置不开 DCHECK，推测无痕标签页会和普通标签页共用同一个渲染器进程和绑在它上面的存储（没在真机上试）。补丁 0016 把无痕模式当成被策略停用。要恢复无痕，得有多进程（BrowserEngineKit 权限，侧载拿不到）或者大改 content。
@@ -164,3 +166,8 @@
 - 2026-10-28（Mac）：用户指出选区的形状和动画还是有点怪，也不会振动；要求和 0024–0026 一起修，只编一次。模拟器里和 Safari 对比（截图量尺寸、录屏逐帧看）：多行选区右边参差不齐（Safari 是整块）；拖柄圆点被上游代码缩小到 0.65 倍（Safari 是原大小），拖动后又变回原大小，两个圆点一大一小；长按时 Safari 显示放大镜、松手后才弹菜单，我们没有放大镜、按着就弹菜单；选区变化时不振动。新增补丁 0027 逐项改掉（细节见 architecture.md）。模拟器里验证过形状、圆点、放大镜和菜单时机；振动用调试器确认了调用，真机待确认。0001–0027 在临时索引里从头打上，和开发分支的代码树一致（验证过）。
 - 2026-10-29（Mac）：0001–0027 的真机版编译通过（00:01 完成），本地打包出 `dist/Chromium-158.0.8127.0-sideload.ipa`（148.5 MB，SHA-256 `926de79e…ca61`）。还没发布。
 - 2026-10-29（Mac）：用户确认发布测试版 7。本仓库推送后，发布为 Release `chromium-158.0.8127.0-sideload-7`（公开，预发布，标签指向提交 `2a40952`，含补丁 0001–0027 和 V8 补丁 0201，IPA 的 SHA-256 是 `926de79e…ca61`；从 GitHub 下载回来核对过，和本地一致）。
+- 2026-10-29（Mac）：用户提到 159 已经出来了，问官方 CI 为什么失败。查了 `ios-blink-rel-fyi` 最近几次构建（buildbucket 和 ResultDB）：编译都通过，失败的是测试。components_unittests 里两个 2026-10-27 的 Autofill 改动新启用或新加了 5 个用例，没写进 use_blink 的测试过滤表；另有一个时好时坏的 content_browsertest 和基础设施错误。都和我们编的 `chrome` 目标无关。
+- 2026-10-29（Mac）：用户要求升到 159.0.8129.0（`3313f827`，CI 第 42447 次构建，编译通过），一切正常就直接发正式版。`01-fetch-chromium.sh` 原来升级不了已有的检出：`src` 是 unmanaged 的，gclient 不切它的版本；V8 停在补丁分支上，gclient 会试着把补丁分支 rebase 到新版本；依赖在 `src` 里是 gitlink，"有未提交改动"的检查会误报。改成脚本自己把 `src` 切到新提交、先把 V8 和 ANGLE 从补丁分支上摘下来、检查时忽略 gitlink，之后同步 21 分钟完成（验证过）。`02-apply-patches.sh` 只有 0023 冲突（上游 `623986716f` 在 `caret_display_item_client.cc` 开头加了 include），对上上下文后重新导出；V8 补丁 0201 不再打（上游 2026-10-27 的 `c8b70908`、`d1204af1` 修好了 DrumBrake 的编译），删掉了。0001–0027 在临时索引里从头打上，和开发分支的代码树一致（验证过）；0005、0016 只是行号变了，也换成重新导出的版本；两个可选补丁也能打上。
+- 2026-10-29（Mac）：模拟器版全量编译通过（01:08–05:00，5 路并行，没有错误；DrumBrake 不打补丁也编过了）。在 iPhone 13 mini / iOS 27.0 模拟器里逐项回归（验证过）：中文维基能打开（走系统代理，中文字体正常）；错误页；英文网页弹翻译提示；UA 是 `iPhone OS 18_7`、`Chrome/159`；能滑到页尾；下拉后再点链接正常；下载的 zip 存进了 Documents；长按选词时显示放大镜，松手后弹"拷贝 / 查询 / 翻译"，拷贝进了剪贴板；多行选区是整块、系统蓝；页内查找显示 1/120，当前项是第一个；深色模式和切回浅色；屏幕键盘弹出后可见区域变成 314、布局高度不变、输入框露在键盘上方；请求桌面版网站换成 Mac 的 UA，也能切回；空输入框长按弹"粘贴"；定位、读写剪贴板、摄像头（虚拟设备）的提示和结果都对；无痕菜单项是灰的；WebAssembly 测试页（循环求和、内存读写、越界报 `RuntimeError`）都对。没重测的：振动没再挂调试器跟踪（0027 干净打上，代码没变）；0018（网络变化时重读代理）。
+- 2026-10-29（Mac）：真机版编到一半（27645 步，06:43）时，上一个 Claude 会话退出，编译被连带打断：用 `setsid` 脱离了会话也没躲过。改成用干净的环境变量（`env -i`，不带会话的环境变量）再脱离启动，接着编（推测会话退出时是按环境变量找到这些进程的，没核实）。另外，5 路编真机版的同时在模拟器里测试，内存很紧（交换区用到 4.9 GB），Mac 一度没有响应；之后编译时先关掉模拟器。
+- 2026-10-29（Mac）：真机版编译通过：`env -i` 重新启动后接着编，06:46–08:54 又编了 19390 步，没有错误（DrumBrake 不打补丁也编过了）。`05-package-ipa.sh` 生成 `dist/Chromium-159.0.8129.0-sideload.ipa`：150.8 MB，arm64，minos 26.0，SDK 27.1，版本号 159.0.8129.0，未签名，SHA-256 `698d20e7…d5b3`（验证过）。`src` 里多了一个未跟踪的 `third_party/dom_distiller_js/`：它是 158 的 DEPS 里的依赖，159 删掉了（上游 `4f5e6c04a7`），gclient 不会删已经拉下来的旧依赖；159 的构建不引用它，两个脚本检查改动时也不看未跟踪的文件，不影响（验证过）。

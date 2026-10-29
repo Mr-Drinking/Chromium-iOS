@@ -31,7 +31,7 @@ export BUNDLE_ID_PREFIX=com.yourname.iosblink   # 换成你自己的反向域名
 scripts/01-fetch-chromium.sh
 ```
 
-- 会在 `~/depot_tools` 装 depot_tools（已有就跳过），在 `~/chromium` 写好只针对 iOS 的 `.gclient`（这两个是默认位置），然后浅克隆固定版本（`scripts/config.sh` 里的 `CHROMIUM_REV`）并运行 hooks。
+- 会在 `~/depot_tools` 装 depot_tools（已有就跳过），在 `~/chromium` 写好只针对 iOS 的 `.gclient`（这两个是默认位置），然后浅克隆固定版本（`scripts/config.sh` 里的 `CHROMIUM_REV`）并运行 hooks。已经拉过的话，会先把 `src` 切到新的固定版本再同步（升级用，见第 8 节）。
 - 第一次要下载几十 GB，耗时取决于网速。googlesource 支持按提交号浅克隆（2026-10-27 验证过）。同步失败时脚本直接报错退出，重跑会接着上次的进度同步；不会自动改用完整历史，因为那要多下几十 GB，而失败原因多半跟历史无关。确实需要完整历史时用 `FULL_HISTORY=1 scripts/01-fetch-chromium.sh`。
 - 结束时会校验 `src` 确实停在固定版本。
 
@@ -97,7 +97,7 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 
 ```bash
 scripts/03-build.sh device
-scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.ipa
+scripts/05-package-ipa.sh            # → dist/Chromium-159.0.8129.0-sideload.ipa
 ```
 
 产物未签名（如需让侧载工具开通 Chrome 的两个应用组，加 `--with-app-groups`，见第 6 节）。安装方式三选一：
@@ -145,8 +145,8 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.i
 
 1. 在 `~/chromium/src` 的 `ios-blink-sideload` 分支上直接改代码、编译、测试。
 2. 修改完提交到对应补丁的 commit（`git commit --fixup` 加 `git rebase -i --autosquash`，或新开一个 commit 作为新补丁）。
-3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 4558926c..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变；早期手写的 0002、0003 例外，格式不同、内容等价，别替换），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。V8 的补丁（`patches/v8/`）在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `f7be3c62`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index f7be3c62..HEAD -o /tmp/new-v8-patches`，文件名按 `v8/0201-…` 起。
-4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。只想核对 `patches/` 和分支是否一致时，也可以不碰工作区（重置分支会刷新补丁涉及文件的时间戳，引起不少重编）：设一个临时的 `GIT_INDEX_FILE`，`git read-tree 4558926c` 后按 `series` 依次 `git apply --cached`，再比较 `git write-tree` 和 `git rev-parse 'ios-blink-sideload^{tree}'`。
+3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 3313f827..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变；早期手写的 0002、0003 例外，格式不同、内容等价，别替换），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。现在没有 V8 补丁（158 上用过的 `v8/0201` 在 159 上不需要了）。以后要改 V8，补丁放 `patches/v8/`，在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `0388bc74`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index 0388bc74..HEAD -o /tmp/new-v8-patches`，`series` 里写成 `src/v8:v8/02xx-….patch`。
+4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。只想核对 `patches/` 和分支是否一致时，也可以不碰工作区（重置分支会刷新补丁涉及文件的时间戳，引起不少重编）：设一个临时的 `GIT_INDEX_FILE`，`git read-tree 3313f827` 后按 `series` 依次 `git apply --cached`，再比较 `git write-tree` 和 `git rev-parse 'ios-blink-sideload^{tree}'`。
 5. 更新 `docs/status.md`，提交本仓库。
 
 补丁正文里统一用 `[ios-blink-sideload]` 标注改动，方便 `git grep` 找到。
@@ -159,8 +159,9 @@ scripts/05-package-ipa.sh            # → dist/Chromium-158.0.8127.0-sideload.i
      -H 'Content-Type: application/json' -H 'Accept: application/json' \
      -d '{"predicate":{"builder":{"project":"chromium","bucket":"ci","builder":"ios-blink-rel-fyi"},"status":"SUCCESS"},"pageSize":1,"fields":"builds.*.input.gitilesCommit"}' | tail -c +5
    ```
+   最近几次如果都只因为和 Blink 无关的测试失败（状态是 FAILURE，但编译步骤通过），可以选编译通过、失败的测试和我们无关的那次，在 `scripts/config.sh` 的注释里写清楚。2026-10-29 选 `3313f827` 就是这样。
 2. 改 `scripts/config.sh` 里的 `CHROMIUM_REV` 和 `CHROMIUM_VERSION`。
-3. `scripts/01-fetch-chromium.sh`，再 `scripts/02-apply-patches.sh`；有冲突就解决，然后按第 7 节重新导出补丁。
+3. `scripts/01-fetch-chromium.sh`，再 `scripts/02-apply-patches.sh`；有冲突就解决，然后按第 7 节重新导出补丁。01 能直接把已有的检出升上去：`src` 的 solution 是 unmanaged 的，gclient 不会动它，所以脚本自己把 `src` 切到新提交；打过补丁的依赖（`src/v8`、`src/third_party/angle`）如果还在补丁分支上，先摘成游离状态，不然 gclient 会试着把补丁分支 rebase 到新版本；`src` 有未提交的改动时直接停下。补丁分支留给 02 在新提交上重建。2026-10-29 升到 159 就是这么做的（同步 21 分钟，只有 0023 要手动对上下文），验证过。
 4. 同步更新 `args/` 里的参数（新版本可能改名或新增开关）和 `docs/status.md` 的固定版本表。
 5. 用 `git grep` 搜旧版本的短哈希和版本号，把 `CLAUDE.md`、`README.md`、本文件等处写死的引用一起改掉。
 

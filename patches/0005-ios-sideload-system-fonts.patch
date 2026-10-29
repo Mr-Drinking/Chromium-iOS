@@ -26,10 +26,10 @@ mini): system-ui, -apple-system and BlinkMacSystemFont render in SF Pro
 and ui-monospace in SF Mono, with spacing within 1% of Safari.
 
 diff --git a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
-index cf1b546b34bec9165831b378edaa861553039788..1e4fb052adc1cba3c9fa4e556d4aaedf15ab9e92 100644
+index 867c60e8fc76df10b556ba334746ea0e348750ea..f914efb410d9a7dc56df5bbe39457200f3f24ef0 100644
 --- a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
 +++ b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
-@@ -562,6 +562,14 @@ FontDescription::FamilyDescription StyleBuilderConverterBase::ConvertFontFamily(
+@@ -563,6 +563,14 @@ FontDescription::FamilyDescription StyleBuilderConverterBase::ConvertFontFamily(
        // If system-ui comes before BlinkMacSystemFont don't use-count.
        count_blink_mac_system_font = false;
      }
@@ -45,10 +45,10 @@ index cf1b546b34bec9165831b378edaa861553039788..1e4fb052adc1cba3c9fa4e556d4aaedf
  
      if (desc.generic_family == FontDescription::GenericFamilyType::kNoFamily) {
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index 872194865b78779be5675dcc895b9856aa5c1bf4..f80fe8dd94e215e1c2c135cee26ad262f360e47f 100644
+index 5f0673a7eed61cf15d645bf6b8b4f2260f1d0a39..9f3a6a29d286984297d8cf4dc976035d2768f908 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -1794,7 +1794,13 @@ component("platform") {
+@@ -1781,7 +1781,13 @@ component("platform") {
    }
  
    if (is_ios) {

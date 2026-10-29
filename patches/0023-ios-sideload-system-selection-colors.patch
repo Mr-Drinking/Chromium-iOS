@@ -44,20 +44,20 @@ index 8ec46f22d966be95ccf47498eb6f71a986ff9586..9ff724f97a31564acbba7ddb8b2f1d74
  }
  
 diff --git a/third_party/blink/renderer/core/editing/caret_display_item_client.cc b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
-index 0b7e5bd524fc172c095905df565927e04437215c..363c9a1201038b616b36d53dab5a9f5b08524843 100644
+index 94fd3ed043bb8c173325d636f045306cee47bb82..6cb28eac756869b5c9097c670bf7774a7ac29c66 100644
 --- a/third_party/blink/renderer/core/editing/caret_display_item_client.cc
 +++ b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
-@@ -25,6 +25,7 @@
+@@ -27,6 +27,7 @@
  
- #include "third_party/blink/renderer/core/editing/caret_display_item_client.h"
+ #include <cmath>
  
 +#include "build/build_config.h"
  #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
  #include "third_party/blink/renderer/core/editing/editing_utilities.h"
- #include "third_party/blink/renderer/core/editing/local_caret_rect.h"
-@@ -45,6 +46,10 @@
- #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
- #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
+@@ -50,6 +51,10 @@
+ #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+ #include "ui/gfx/geometry/transform.h"
  
 +#if BUILDFLAG(IS_IOS)
 +#include "third_party/blink/renderer/core/layout/layout_theme_ios.h"
@@ -66,7 +66,7 @@ index 0b7e5bd524fc172c095905df565927e04437215c..363c9a1201038b616b36d53dab5a9f5b
  namespace blink {
  
  CaretDisplayItemClient::CaretDisplayItemClient() = default;
-@@ -221,6 +226,13 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
+@@ -294,6 +299,13 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
      new_color = caret_position.AnchorNode()->GetLayoutObject()->ResolveColor(
          GetCSSPropertyCaretColor());
    }

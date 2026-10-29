@@ -20,7 +20,7 @@ Examples:
   python3 tools/blinker_rebase.py --target-src ~/chromium/src --categories memory,wasm
 
   # Without a checkout, against a gitiles revision:
-  python3 tools/blinker_rebase.py --target-chromium 4558926cce232609ce125114e633e0b3a67b793d \
+  python3 tools/blinker_rebase.py --target-chromium 3313f82787695ce167d13fb795a435d3019af3f6 \
       --files v8/src/wasm/wasm-js.cc
 """
 

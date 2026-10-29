@@ -30,8 +30,31 @@ target_os_only = True
 EOF
 fi
 
-if [ -d src/.git ] && [ -n "$(git -C src status --porcelain --untracked-files=no)" ]; then
-  die "src/ has local changes; commit or stash them (scripts/02-apply-patches.sh re-applies the series on a fresh branch)"
+if [ -d src/.git ]; then
+  # Dependencies are gitlinks in src; a patched one, or any of them before
+  # gclient sync has run, shows up as modified there.
+  [ -z "$(git -C src status --porcelain --untracked-files=no --ignore-submodules=all)" ] ||
+    die "src/ has local changes; commit or stash them (scripts/02-apply-patches.sh re-applies the series on a fresh branch)"
+  # The src solution is unmanaged, so gclient sync leaves its checkout alone:
+  # move it to the pinned revision here. The patch branch stays as it is;
+  # scripts/02-apply-patches.sh rebuilds it on the new revision.
+  if [ "$(git -C src rev-parse HEAD)" != "$CHROMIUM_REV" ]; then
+    if ! git -C src cat-file -e "$CHROMIUM_REV^{commit}" 2>/dev/null; then
+      note "Fetching src@$CHROMIUM_REV"
+      git -C src fetch $([ "$(git -C src rev-parse --is-shallow-repository)" = true ] && echo --depth=1) origin "$CHROMIUM_REV"
+    fi
+    note "Checking out src@$CHROMIUM_REV"
+    git -C src checkout -q --detach "$CHROMIUM_REV"
+  fi
+  # gclient would try to rebase a dependency that is on the local patch
+  # branch onto its new DEPS revision; detached, it is simply checked out.
+  # Same list as base_rev_for() in 02-apply-patches.sh.
+  for dep in src/v8 src/third_party/angle; do
+    if [ -e "$dep/.git" ] && [ "$(git -C "$dep" symbolic-ref -q --short HEAD)" = "$PATCH_BRANCH" ]; then
+      note "Detaching $dep from $PATCH_BRANCH"
+      git -C "$dep" checkout -q --detach
+    fi
+  done
 fi
 
 # Shallow by default: googlesource serves a pinned commit at depth 1. Full

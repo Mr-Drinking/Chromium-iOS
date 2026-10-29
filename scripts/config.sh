@@ -15,12 +15,15 @@ if [ -f "$REPO_ROOT/scripts/config.local.sh" ]; then
   source "$REPO_ROOT/scripts/config.local.sh"
 fi
 
-# Pinned Chromium main revision: green on the official iOS Blink CI builder
-# (ios-blink-rel-fyi, build 8666871797155972657, 2026-10-26), which compiles
+# Pinned Chromium main revision, from the official iOS Blink CI builder
+# (ios-blink-rel-fyi, build 8666696698874083665, 2026-10-28), which compiles
 # "all" with use_blink=true and runs tests on an iPhone 16 / iOS 27.0
-# simulator with Xcode 27 (27a266a). DEPS pins V8 f7be3c62, ANGLE ab90d2a9.
-CHROMIUM_REV="${CHROMIUM_REV:-4558926cce232609ce125114e633e0b3a67b793d}"
-CHROMIUM_VERSION="${CHROMIUM_VERSION:-158.0.8127.0}"
+# simulator with Xcode 27 (27a266a). It compiled, and every test suite passed
+# except five components_unittests Autofill tests that were enabled or added
+# on 2026-10-27 without an entry in the use_blink test filter. DEPS pins V8
+# 0388bc74, ANGLE 61188387.
+CHROMIUM_REV="${CHROMIUM_REV:-3313f82787695ce167d13fb795a435d3019af3f6}"
+CHROMIUM_VERSION="${CHROMIUM_VERSION:-159.0.8129.0}"
 
 # gclient root; the Chromium checkout ends up in "$CHROMIUM_DIR/src".
 # Needs roughly 150-200 GB free.
