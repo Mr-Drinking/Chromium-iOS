@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Fri, 30 Oct 2026 03:05:03 +0800
+Subject: [PATCH] iOS sideload: keep the page out of the notch
+
+In landscape the web view's scroll view spans the whole screen, and
+Chrome's insets cover only the side with its App Bar, so the notch hid
+the page's edge on the other side. WKWebView keeps pages that don't ask
+for viewport-fit=cover inside the safe area, and Safari fills the strip
+beside the notch with the page's background color.
+
+Do the same: the page's view keeps out of the window's unsafe area on
+the left and right (the larger of Chrome's inset and the unsafe area on
+each side), and the scroll view takes the page's background color for
+the strip. The view follows the safe area as it moves.
+
+Pages that set viewport-fit=cover are inset too: Blink doesn't get the
+safe area insets (env(safe-area-inset-*)) on iOS yet.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator (iPhone
+13 mini, notch 50 points deep in landscape), with a test page that marks
+its edges: in both landscapes the page starts 50 points from the
+notch's side, next to the App Bar on the other, and the strip shows the
+page's background color; portrait is unchanged. Not checked on a
+device.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index def6c042b868265a0530b3db3ea47f3ca09ff332..3cab191f1dedc0755604d2453f334300d5d05002 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -6,7 +6,9 @@
+ 
+ #import <UIKit/UIKit.h>
+ 
++#include <algorithm>
+ #include <cstdint>
++#include <utility>
+ 
+ #include "base/command_line.h"
+ #include "build/ios_buildflags.h"
+@@ -59,6 +61,24 @@ - (BOOL)isRunningTests {
+ 
+ // Used for setting the requested renderer size when testing.
+ constexpr gfx::Size kDefaultSizeForTesting = gfx::Size(800, 600);
++
++// [ios-blink-sideload] How far the window's unsafe area (in landscape, the
++// notch on one side and the rounded corners on both) reaches into `view` from
++// its left and right edges.
++std::pair<CGFloat, CGFloat> HorizontalUnsafeInsets(UIView* view) {
++  UIWindow* window = view.window;
++  if (!window) {
++    return {0, 0};
++  }
++  const UIEdgeInsets safe_area = window.safeAreaInsets;
++  const CGRect frame = [view convertRect:view.bounds toView:window];
++  const CGFloat left = safe_area.left - CGRectGetMinX(frame);
++  const CGFloat right =
++      CGRectGetMaxX(frame) - (CGRectGetMaxX(window.bounds) - safe_area.right);
++  // Mid-rotation the view can sit far outside the window for a moment.
++  return {std::clamp<CGFloat>(left, 0, safe_area.left),
++          std::clamp<CGFloat>(right, 0, safe_area.right)};
++}
+ constexpr gfx::Size KDefaultSizeForPreventResizingForTesting =
+     gfx::Size(980, 735);
+ 
+@@ -419,6 +439,9 @@ bool IsTesting() {
+   // frame doesn't cover showed what is behind the view until the page drew at
+   // its new size.
+   ui_view_->view_.backgroundColor = skia::UIColorFromSkColor(opaque_color);
++  // [ios-blink-sideload] And beside the page, where it keeps out of the notch
++  // (UpdateFrameBounds()), as Safari does.
++  [ui_view_->view_ superview].backgroundColor = ui_view_->view_.backgroundColor;
+ }
+ 
+ void RenderWidgetHostViewIOS::
+@@ -1016,7 +1039,15 @@ bool IsTesting() {
+   // drawn that far below the toolbar, over the scroll view's gray background.
+   const CGPoint scrollOffset = [scrollView contentOffset];
+   const CGRect parentBounds = [scrollView bounds];
+-  const UIEdgeInsets parentInset = [scrollView contentInset];
++  UIEdgeInsets parentInset = [scrollView contentInset];
++  // [ios-blink-sideload] Keep the page out of the notch, as WKWebView does for
++  // pages that don't ask for viewport-fit=cover. In landscape the scroll view
++  // spans the screen, and Chrome's insets only cover the side with its App
++  // Bar: the notch hid the page's edge on the other side. The scroll view
++  // shows the page's background color there (UpdateBackgroundColor()).
++  const auto [unsafe_left, unsafe_right] = HorizontalUnsafeInsets(scrollView);
++  parentInset.left = std::max(parentInset.left, unsafe_left);
++  parentInset.right = std::max(parentInset.right, unsafe_right);
+ 
+   CGRect frameBounds = UIEdgeInsetsInsetRect(parentBounds, parentInset);
+   frameBounds.origin = CGPointMake(scrollOffset.x + parentInset.left,
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+index 1ed339d510e22deff3b552844915605157574d47..29cd07c7ed069e0de1ec60951a0930dc5fc5c18f 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
+@@ -285,6 +285,16 @@ - (void)removeResizeSnapshotIfCount:(NSUInteger)count {
+   }
+ }
+ 
++// [ios-blink-sideload] The view keeps out of the unsafe area
++// (RenderWidgetHostViewIOS::UpdateFrameBounds()), which moves as the phone
++// turns.
++- (void)safeAreaInsetsDidChange {
++  [super safeAreaInsetsDidChange];
++  if (_view) {
++    _view->ContentInsetChanged();
++  }
++}
++
+ - (void)layoutSubviews {
+   CHECK(_view);
+   [super layoutSubviews];
+-- 
+2.54.0 (Apple Git-157)
+

@@ -10,19 +10,29 @@ WebContentsViewIOS paints behind it. WKWebView (Safari, Chrome on
 WebKit) shows the page as it was, scaled to the new width, until the
 new layout is ready.
 
-Do the same: when an animation changes the view's width, it shows a
-snapshot of itself as it was, scaled to the new width, and removes it
-shortly after a frame of the page at its new size is active (its new
-LocalSurfaceId), or after 1.5 seconds if none comes. Where nothing
+Do the same: when an animation changes the view's width, it covers
+itself with the page's background color and a snapshot of itself as it
+was, scaled to the new width, and removes the cover shortly after a
+frame of the page at its new size is active (its new LocalSurfaceId),
+or after 5 seconds if none comes: a busy page can take seconds to lay
+out again without JIT on the phone, and WKWebView keeps its picture
+until the page has drawn. The cover spans the whole view, so turning
+to portrait, where the scaled picture is shorter than the view, shows
+the page's color below it, not the old frame or black. Where nothing
 covers the view, show the page's background color, as the Mac does (on
 the view, besides the compositor), over the system background instead
 of light gray.
 
 Status: verified at Chromium 3313f827 in the iOS 27 simulator, with
-screenshots in quick succession while turning a test page from portrait
-to landscape and back: the page turns whole, and its new layout follows
-within a few frames, with no gray area (before: a large gray area until
-the page drew at its new size). Not checked on a device.
+screenshots in quick succession while turning a test page (whose
+resize handlers block for 1.6 s) from portrait to landscape, between
+the two landscapes and back: the page turns whole, the scaled picture
+stays until the page has drawn at its new size and then gives way to
+it, and turning to portrait shows the page's color below the picture
+(before: a large gray area until the page drew at its new size; with
+the first version of this change, a 1.5 s limit removed the picture
+while the page was still busy, and the old frame showed in a corner).
+Not checked on a device.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
 index 0d4bf31e4213680fe529d24e4affee4d7ae91c12..dabfed17eec54465afc7a5139d5d5bf824e013f5 100644
@@ -144,18 +154,20 @@ index 1ba5744901b76c80ceff6dcf499890602715f9b1..ad8b3d9a4a11a5fa54e123298723c8c1
  
  #endif  // CONTENT_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_IOS_UIVIEW_H_
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
-index aff5a86fa346563b542bba9a2acc787f1ae3eda3..4459bef9e8ae5c94573ba7bc79044d443fc7b611 100644
+index aff5a86fa346563b542bba9a2acc787f1ae3eda3..1ed339d510e22deff3b552844915605157574d47 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
-@@ -161,6 +161,16 @@ - (void)resetBlinkAnimation {
+@@ -161,6 +161,18 @@ - (void)resetBlinkAnimation {
  
  @end
  
 +@interface RenderWidgetUIView () {
-+  // [ios-blink-sideload] While a rotation resizes the view: a snapshot of the
-+  // page as it was, scaled to the view's new width, the size it was taken at,
-+  // and a count that ties a removal timer to its snapshot.
++  // [ios-blink-sideload] While a rotation resizes the view: a cover in the
++  // page's background color with a snapshot of the page as it was, scaled to
++  // the view's new width, the size it was taken at, and a count that ties a
++  // removal timer to its snapshot.
 +  UIView* _resizeSnapshot;
++  UIView* _resizeSnapshotImage;
 +  CGSize _resizeSnapshotSize;
 +  NSUInteger _resizeSnapshotCount;
 +}
@@ -164,7 +176,7 @@ index aff5a86fa346563b542bba9a2acc787f1ae3eda3..4459bef9e8ae5c94573ba7bc79044d44
  @implementation RenderWidgetUIView
  @synthesize tokenizer;
  
-@@ -185,6 +195,81 @@ - (instancetype)initWithWidget:
+@@ -185,6 +197,94 @@ - (instancetype)initWithWidget:
    return self;
  }
  
@@ -194,24 +206,34 @@ index aff5a86fa346563b542bba9a2acc787f1ae3eda3..4459bef9e8ae5c94573ba7bc79044d44
 +      UIView.inheritedAnimationDuration <= 0) {
 +    return;
 +  }
-+  UIView* snapshot = [self snapshotViewAfterScreenUpdates:NO];
-+  if (!snapshot) {
++  UIView* image = [self snapshotViewAfterScreenUpdates:NO];
++  if (!image) {
 +    return;
 +  }
++  // On the page's background color, over the whole view: where the scaled
++  // picture doesn't reach (turning to portrait), the view's layer still
++  // showed the old frame, or black.
++  UIView* snapshot = [[UIView alloc] init];
 +  snapshot.userInteractionEnabled = NO;
++  snapshot.backgroundColor = self.backgroundColor;
++  [snapshot addSubview:image];
 +  [UIView performWithoutAnimation:^{
 +    snapshot.frame = CGRectMake(0, 0, oldSize.width, oldSize.height);
++    image.frame = snapshot.bounds;
 +    [self addSubview:snapshot];
 +  }];
 +  _resizeSnapshot = snapshot;
++  _resizeSnapshotImage = image;
 +  _resizeSnapshotSize = oldSize;
 +  self.clipsToBounds = YES;
 +  [self layoutResizeSnapshotForSize:size];
 +
-+  // Don't keep it if the page doesn't draw.
++  // Don't keep it if the page doesn't draw. WKWebView keeps its picture until
++  // the page has drawn, and a busy page can take seconds without JIT on the
++  // phone.
 +  const NSUInteger count = ++_resizeSnapshotCount;
 +  __weak RenderWidgetUIView* weakSelf = self;
-+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC),
++  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5000 * NSEC_PER_MSEC),
 +                 dispatch_get_main_queue(), ^{
 +                   [weakSelf removeResizeSnapshotIfCount:count];
 +                 });
@@ -220,10 +242,12 @@ index aff5a86fa346563b542bba9a2acc787f1ae3eda3..4459bef9e8ae5c94573ba7bc79044d44
 +  }
 +}
 +
-+// [ios-blink-sideload] Scales the snapshot to the view's width `size.width`.
++// [ios-blink-sideload] Covers the view at size `size`, with the snapshot
++// scaled to its width.
 +- (void)layoutResizeSnapshotForSize:(CGSize)size {
 +  const CGFloat scale = size.width / _resizeSnapshotSize.width;
-+  _resizeSnapshot.frame =
++  _resizeSnapshot.frame = CGRectMake(0, 0, size.width, size.height);
++  _resizeSnapshotImage.frame =
 +      CGRectMake(0, 0, _resizeSnapshotSize.width * scale,
 +                 _resizeSnapshotSize.height * scale);
 +}
@@ -234,6 +258,7 @@ index aff5a86fa346563b542bba9a2acc787f1ae3eda3..4459bef9e8ae5c94573ba7bc79044d44
 +  }
 +  [_resizeSnapshot removeFromSuperview];
 +  _resizeSnapshot = nil;
++  _resizeSnapshotImage = nil;
 +  self.clipsToBounds = NO;
 +}
 +

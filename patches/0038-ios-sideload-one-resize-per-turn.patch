@@ -1,0 +1,176 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Fri, 30 Oct 2026 03:05:35 +0800
+Subject: [PATCH] iOS sideload: one resize per turn
+
+While the phone turns, the page's view and the screen change several
+times in a row: Chrome's inset for the App Bar first (the view briefly
+gets the App Bar's side taken off its portrait width), then the rotated
+bounds, the toolbar's new height, and last the screen's orientation.
+Each change went to the page as new visual properties, and the page
+laid out and ran its resize handlers for every one it got. On a phone
+without JIT, a heavy page (GitHub) takes a second or more for each, and
+a turn took 3 to 4 seconds, the page not responding to touch meanwhile.
+WKWebView sends the web process one update per turn, with the final
+size.
+
+Do the same: when the view starts an animated resize (the turn's
+snapshot) or the display rotates (a half turn, which keeps the view's
+size), hold the visual properties until the view, Chrome's insets and
+the screen have stayed unchanged for 150 ms (600 ms at most), then send
+them once, with the new orientation.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator with
+temporary logging: turning a test page (whose orientation and resize
+handlers block for 0.8 s each) or a Wikipedia article between portrait
+and both landscapes, the page's widget gets exactly one
+UpdateVisualProperties per turn, about 0.3 s after the turn starts
+(before: three or four, the first an intermediate size), and runs its
+handlers once; Wikipedia draws at its new size 0.4 to 0.6 s after the
+turn starts. Not checked on a device.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
+index dabfed17eec54465afc7a5139d5d5bf824e013f5..6c43ce766240b37810868a42c42c939c3683985c 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.h
++++ b/content/browser/renderer_host/render_widget_host_view_ios.h
+@@ -13,6 +13,7 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/time/time.h"
++#include "base/timer/timer.h"
+ #include "build/ios_buildflags.h"
+ #include "components/viz/common/surfaces/surface_id.h"
+ #include "content/browser/renderer_host/browser_compositor_ios.h"
+@@ -166,6 +167,7 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+   display::ScreenInfo GetCurrentScreenInfo() const override;
+   void SetCurrentDeviceScaleFactor(float device_scale_factor) override;
+   void UpdateScreenInfo() override;
++  bool CanSynchronizeVisualProperties() override;
+ 
+   // display::DisplayObserver:
+   void OnDisplayMetricsChanged(const display::Display& display,
+@@ -317,6 +319,19 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+   bool awaiting_resize_frame_ = false;
+   viz::LocalSurfaceId resize_surface_id_;
+ 
++  // [ios-blink-sideload] While the phone turns, the view and the screen change
++  // several times in a row: Chrome's insets for the App Bar, the rotated
++  // bounds, the toolbar's height, then the orientation. Each change sent the
++  // page a new size or orientation, and the page laid out and ran its resize
++  // handlers for every one of them, which takes seconds on a busy page
++  // without JIT. As WKWebView does, the page gets them once, when they have
++  // settled (OnRotationSettled()).
++  void DeferVisualPropertiesForRotation();
++  void OnRotationSettled();
++  bool deferring_for_rotation_ = false;
++  base::TimeTicks rotation_deferral_start_;
++  base::OneShotTimer rotation_settle_timer_;
++
+   // This stores the underlying view bounds. The UIView might change size but
+   // we do not change its size during scroll.
+   gfx::Rect view_bounds_;
+diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
+index 3cab191f1dedc0755604d2453f334300d5d05002..0777eff37e577c02ba780ca84535d343e713f135 100644
+--- a/content/browser/renderer_host/render_widget_host_view_ios.mm
++++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
+@@ -11,6 +11,7 @@
+ #include <utility>
+ 
+ #include "base/command_line.h"
++#include "base/functional/bind.h"
+ #include "build/ios_buildflags.h"
+ #include "cc/mojom/render_frame_metadata.mojom-shared.h"
+ #include "components/input/events_helper.h"
+@@ -62,6 +63,12 @@ - (BOOL)isRunningTests {
+ // Used for setting the requested renderer size when testing.
+ constexpr gfx::Size kDefaultSizeForTesting = gfx::Size(800, 600);
+ 
++// [ios-blink-sideload] See RenderWidgetHostViewIOS::
++// DeferVisualPropertiesForRotation(): how long the view and the screen must
++// stay unchanged before the page gets them, and the longest a turn holds them.
++constexpr base::TimeDelta kRotationSettleDelay = base::Milliseconds(150);
++constexpr base::TimeDelta kMaxRotationDeferral = base::Milliseconds(600);
++
+ // [ios-blink-sideload] How far the window's unsafe area (in landscape, the
+ // notch on one side and the rounded corners on both) reaches into `view` from
+ // its left and right edges.
+@@ -522,6 +529,10 @@ bool IsTesting() {
+     if (awaiting_resize_frame_) {
+       resize_surface_id_ = GetLocalSurfaceId();
+     }
++    // [ios-blink-sideload] Still turning: wait for the next change.
++    if (deferring_for_rotation_) {
++      DeferVisualPropertiesForRotation();
++    }
+   }
+   ComputeDisplayFeature();
+ 
+@@ -536,12 +547,45 @@ bool IsTesting() {
+ void RenderWidgetHostViewIOS::OnDisplayMetricsChanged(
+     const display::Display& display,
+     uint32_t changed_metrics) {
+-  // [ios-blink-sideload] See `display_observer_`.
++  // [ios-blink-sideload] See `display_observer_`. A half turn (from one
++  // landscape to the other) doesn't resize the view, so it starts here.
++  if (changed_metrics & display::DisplayObserver::DISPLAY_METRIC_ROTATION) {
++    DeferVisualPropertiesForRotation();
++  }
+   if (host()) {
+     UpdateScreenInfo();
+   }
+ }
+ 
++bool RenderWidgetHostViewIOS::CanSynchronizeVisualProperties() {
++  // [ios-blink-sideload] See DeferVisualPropertiesForRotation().
++  return !deferring_for_rotation_;
++}
++
++void RenderWidgetHostViewIOS::DeferVisualPropertiesForRotation() {
++  const base::TimeTicks now = base::TimeTicks::Now();
++  if (!deferring_for_rotation_) {
++    deferring_for_rotation_ = true;
++    rotation_deferral_start_ = now;
++  }
++  const base::TimeDelta delay =
++      std::min(kRotationSettleDelay,
++               rotation_deferral_start_ + kMaxRotationDeferral - now);
++  rotation_settle_timer_.Start(
++      FROM_HERE, std::max(delay, base::TimeDelta()),
++      base::BindOnce(&RenderWidgetHostViewIOS::OnRotationSettled,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void RenderWidgetHostViewIOS::OnRotationSettled() {
++  deferring_for_rotation_ = false;
++  if (host()) {
++    // The final size and screen at once, even if an earlier size hasn't been
++    // acknowledged yet.
++    host()->NotifyScreenInfoChanged();
++  }
++}
++
+ void RenderWidgetHostViewIOS::OnSynchronizedDisplayPropertiesChanged(
+     bool rotation) {
+   host()->SynchronizeVisualProperties();
+@@ -559,6 +603,7 @@ bool IsTesting() {
+   // new size (UpdateScreenInfo() allocates it as the view lays out).
+   awaiting_resize_frame_ = true;
+   resize_surface_id_ = viz::LocalSurfaceId();
++  DeferVisualPropertiesForRotation();
+ }
+ 
+ void RenderWidgetHostViewIOS::OnOldViewDidNavigatePreCommit() {
+@@ -1097,6 +1142,10 @@ bool IsTesting() {
+ }
+ 
+ void RenderWidgetHostViewIOS::ContentInsetChanged() {
++  // [ios-blink-sideload] Chrome's insets change as the phone turns too.
++  if (deferring_for_rotation_) {
++    DeferVisualPropertiesForRotation();
++  }
+   if (last_root_scroll_offset_) {
+     ApplyRootScrollOffsetChanged(*last_root_scroll_offset_, /*force=*/true);
+   } else {
+-- 
+2.54.0 (Apple Git-157)
+
