@@ -45,3 +45,8 @@ cppgc_enable_caged_heap = false
 # guard region per Wasm memory.
 v8_enable_drumbrake = true
 v8_drumbrake_bounds_checks = true
+
+# chrome://credits lists the licenses of Chromium and its third-party code.
+# Only official builds generate it by default (tools/licenses/licenses.py);
+# others get a placeholder page.
+generate_about_credits = true

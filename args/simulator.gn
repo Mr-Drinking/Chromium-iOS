@@ -37,3 +37,6 @@ v8_enable_sandbox = false
 cppgc_enable_caged_heap = false
 v8_enable_drumbrake = true
 v8_drumbrake_bounds_checks = true
+
+# Same chrome://credits as the device build (see device.gn).
+generate_about_credits = true

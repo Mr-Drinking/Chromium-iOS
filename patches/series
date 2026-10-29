@@ -31,6 +31,8 @@
 0030-ios-sideload-follow-rotations.patch
 0031-ios-sideload-project-page-menu-item.patch
 0032-ios-sideload-hide-google-lens.patch
+0033-ios-sideload-file-upload-menu.patch
+0034-ios-sideload-chrome-scheme-pages.patch
 # Optional; applied only with --with-optional, or uncomment to make default.
 # optional/0101-gl-init-failure-without-abort.patch
 # optional/0102-disable-media-capture.patch

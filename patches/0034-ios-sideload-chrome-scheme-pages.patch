@@ -1,0 +1,538 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 16:21:48 +0800
+Subject: [PATCH] iOS sideload: chrome:// pages
+
+chrome:// URLs led nowhere. Chrome's iOS WebUI, which serves
+chrome://version, chrome://flags, chrome://credits and the like, is
+built on ios/web, and the Blink port connected none of it. Connect what
+WebKit's CRWWebUISchemeHandler and WebStateImpl provide:
+
+- Loading: IOSContentBrowserClient serves chrome:// navigations, and the
+  subresources of chrome:// pages, from the BrowserState's network
+  stack, which handles the scheme with the data sources the WebUI
+  registers (URLDataManagerIOSBackend). content used its own WebUI
+  loader for its WebUI schemes without asking the embedder; on iOS it
+  now asks first for navigations (NavigationURLLoaderImpl::Start()) and
+  lets the embedder's factory replace its own for subresources
+  (RenderFrameHostImpl). The requests go without the frame's DevTools
+  throttling profile: the BrowserState's network stack runs on the IO
+  thread, and the throttling state may only be used on the thread of
+  content's network service (the next ordinary page hit a DCHECK).
+- The WebUI: ContentWebState creates the page's WebUI controller when a
+  navigation to it starts, as WebStateImpl does, and drops it when the
+  tab goes elsewhere. The controller's MojoFacade expects an interface
+  binder for the main frame, which ContentWebState now has; it was null,
+  and the first page crashed the app as it finished loading.
+- Committing: content only lets processes with its own WebUI bindings
+  commit chrome:// pages, and ends any other renderer that does: here
+  the in-process one, and the app with it. ContentWebState grants the
+  renderer the chrome scheme before the commit.
+- chrome.send(): web_ui.js posts to the "WebUIMessage" handler.
+  WebUIMessagingJavaScriptFeature handles it for WebKit but casts the
+  WebState to WebStateImpl, so ContentWebFramesManager gives these
+  messages to ContentWebState, which checks them the same way and hands
+  them to the WebUI.
+
+Pages whose WebUI talks Mojo still show nothing (chrome://chrome-urls
+only its title): MojoFacade needs ExecuteAsyncJavaScript(), which
+ContentWebFrame doesn't implement yet (crbug.com/507056709).
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator:
+chrome://version shows the version, OS, user agent and command line
+with the Chromium logo; chrome://flags lists the experiments (asked for
+with chrome.send() and returned by the handler); chrome://credits shows
+the licenses (with generate_about_credits = true in the build's args,
+the sample page otherwise); Wikipedia, GitHub and bilibili load as
+before, also right after a chrome:// page; chrome://chrome-urls shows
+only its title. Not checked on a device.
+
+diff --git a/content/browser/loader/navigation_url_loader_impl.cc b/content/browser/loader/navigation_url_loader_impl.cc
+index b6cca8069223bb37bbd11f49d70986112b398d5b..db84b1e43c1d6b4ed0aa4058370bbcf86701e117 100644
+--- a/content/browser/loader/navigation_url_loader_impl.cc
++++ b/content/browser/loader/navigation_url_loader_impl.cc
+@@ -709,14 +709,25 @@ void NavigationURLLoaderImpl::Start() {
+       CHECK(frame_tree_node);
+       CHECK(frame_tree_node->navigation_request());
+ 
++      mojo::PendingRemote<network::mojom::URLLoaderFactory> webui_factory;
++#if BUILDFLAG(IS_IOS)
++      // [ios-blink-sideload] Ask the embedder first: Chrome's iOS WebUI isn't
++      // content's, and serves its chrome:// pages itself.
++      webui_factory =
++          GetContentClient()->browser()->CreateNonNetworkNavigationURLLoaderFactory(
++              scheme, frame_tree_node_id_);
++#endif
++      if (!webui_factory) {
++        webui_factory = CreateWebUIURLLoaderFactoryWithoutOriginLock(
++            WebUIURLLoaderFactoryPasskey::GetPassKey(),
++            frame_tree_node->current_frame_host(), scheme, {});
++      }
++
+       CreateThrottlingLoaderAndStart(
+           url_loader_factory::Create(
+               ContentBrowserClient::URLLoaderFactoryType::kNavigation,
+               url_loader_factory::TerminalParams::ForNonNetwork(
+-                  CreateWebUIURLLoaderFactoryWithoutOriginLock(
+-                      WebUIURLLoaderFactoryPasskey::GetPassKey(),
+-                      frame_tree_node->current_frame_host(), scheme, {}),
+-                  network::mojom::kBrowserProcessId),
++                  std::move(webui_factory), network::mojom::kBrowserProcessId),
+               url_loader_factory::ContentClientParams(
+                   browser_context_, frame_tree_node->current_frame_host(),
+                   frame_tree_node->current_frame_host()
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index f8610e9525a37600e217fd59f75e29735f272768..50762444a9323ef77a65c4304f1e9c247312222b 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -13490,8 +13490,16 @@ void RenderFrameHostImpl::CommitNavigation(
+               subresource_loader_factories_config.ukm_source_id()),
+           devtools_instrumentation::WillCreateURLLoaderFactoryParams::ForFrame(
+               this));
++#if BUILDFLAG(IS_IOS)
++      // [ios-blink-sideload] The embedder's factory replaces content's WebUI
++      // one, the only one already there: Chrome's iOS WebUI isn't content's
++      // (see NavigationURLLoaderImpl::Start()).
++      subresource_loader_factories->pending_scheme_specific_factories()
++          .insert_or_assign(scheme, std::move(pending_factory_proxy));
++#else
+       subresource_loader_factories->pending_scheme_specific_factories().emplace(
+           scheme, std::move(pending_factory_proxy));
++#endif
+     }
+ 
+     subresource_loader_factories->pending_isolated_world_factories() =
+diff --git a/ios/web/content/content_browser_context.h b/ios/web/content/content_browser_context.h
+index f9ad3df60417acf42548d36a4551dfc17cf27762..83f90d9819c8bf86be4d4e6f1f6ae41b8d5588e6 100644
+--- a/ios/web/content/content_browser_context.h
++++ b/ios/web/content/content_browser_context.h
+@@ -38,6 +38,9 @@ class ContentBrowserContext : public content::BrowserContext {
+   explicit ContentBrowserContext(web::BrowserState* browser_state);
+   ~ContentBrowserContext() override;
+ 
++  // [ios-blink-sideload] The BrowserState this context belongs to.
++  web::BrowserState* GetBrowserState() const { return browser_state_; }
++
+   // BrowserContext implementation.
+   base::FilePath GetPath() const override;
+   std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
+diff --git a/ios/web/content/init/BUILD.gn b/ios/web/content/init/BUILD.gn
+index 2b9a1dd78bf80500764f0c8e4fb94fb5ece8041b..63ba2a4af6ab656e18083bf07753c29eb0dba510 100644
+--- a/ios/web/content/init/BUILD.gn
++++ b/ios/web/content/init/BUILD.gn
+@@ -38,11 +38,13 @@ source_set("init") {
+     "//content/public/browser",
+     "//content/public/common/",
+     "//content/public/renderer",
++    "//ios/web/content",
+     "//ios/web/content:ui",
+     "//ios/web/content/common:non_code_constants",
+     "//ios/web/public",
+     "//ios/web/public/init",
+     "//services/device/public/cpp/geolocation",
++    "//services/network/public/cpp",
+     "//third_party/blink/public/common",
+     "//ui/base",
+     "//ui/native_theme",
+diff --git a/ios/web/content/init/ios_content_browser_client.cc b/ios/web/content/init/ios_content_browser_client.cc
+index 6af713abb931a4e7eb381e7bc01dad466d9dd195..59d40919529d9fcd53e04127e85904482fb81081 100644
+--- a/ios/web/content/init/ios_content_browser_client.cc
++++ b/ios/web/content/init/ios_content_browser_client.cc
+@@ -4,18 +4,26 @@
+ 
+ #include "ios/web/content/init/ios_content_browser_client.h"
+ 
++#import "base/memory/self_deleting.h"
+ #import "components/embedder_support/user_agent_utils.h"
+ #import "components/performance_manager/embedder/performance_manager_registry.h"
+ #import "components/version_info/version_info.h"
+ #import "content/public/browser/browser_context.h"
+ #import "content/public/browser/devtools_manager_delegate.h"
++#import "content/public/browser/render_frame_host.h"
+ #import "content/public/browser/web_contents.h"
+ #import "content/public/browser/web_contents_view_delegate.h"
+ #import "content/public/common/url_constants.h"
+ #import "ios/web/content/common/constants.h"
++#import "ios/web/content/content_browser_context.h"
+ #import "ios/web/content/init/ios_browser_main_parts.h"
+ #import "ios/web/content/ui/web_contents_view_delegate_impl.h"
++#import "ios/web/public/browser_state.h"
++#import "services/network/public/cpp/resource_request.h"
++#import "services/network/public/cpp/self_deleting_url_loader_factory.h"
++#import "services/network/public/cpp/shared_url_loader_factory.h"
+ #import "services/network/public/mojom/network_context.mojom.h"
++#import "services/network/public/mojom/url_loader.mojom.h"
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "ui/native_theme/native_theme.h"
+@@ -42,6 +50,60 @@ base::FilePath GetPartitionPath(content::BrowserContext* context,
+   return path;
+ }
+ 
++// [ios-blink-sideload] Forwards content's requests for chrome:// URLs to the
++// BrowserState's network stack (see CreateWebUIURLLoaderFactory()), without
++// the frame's DevTools throttling profile: that stack runs on the IO thread,
++// and the process-wide throttling state may only be used on the thread of
++// content's network service. With it, the next page from content's network
++// service hit a DCHECK (ThrottlingController's thread checker).
++class WebUIURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
++ public:
++  WebUIURLLoaderFactory(
++      scoped_refptr<network::SharedURLLoaderFactory> browser_state_factory,
++      mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
++      base::SelfDeletingPassKey key)
++      : network::SelfDeletingURLLoaderFactory(std::move(receiver), key),
++        browser_state_factory_(std::move(browser_state_factory)) {}
++
++  WebUIURLLoaderFactory(const WebUIURLLoaderFactory&) = delete;
++  WebUIURLLoaderFactory& operator=(const WebUIURLLoaderFactory&) = delete;
++
++ private:
++  ~WebUIURLLoaderFactory() override = default;
++
++  // network::mojom::URLLoaderFactory:
++  void CreateLoaderAndStart(
++      mojo::PendingReceiver<network::mojom::URLLoader> loader,
++      int32_t request_id,
++      uint32_t options,
++      const network::ResourceRequest& request,
++      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
++      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
++      override {
++    network::ResourceRequest browser_state_request(request);
++    browser_state_request.throttling_profile_id.reset();
++    browser_state_factory_->CreateLoaderAndStart(
++        std::move(loader), request_id, options, browser_state_request,
++        std::move(client), traffic_annotation);
++  }
++
++  scoped_refptr<network::SharedURLLoaderFactory> browser_state_factory_;
++};
++
++// [ios-blink-sideload] Loads chrome:// URLs through the BrowserState's network
++// stack, which serves the data sources of Chrome's iOS WebUI
++// (URLDataManagerIOSBackend), as CRWWebUISchemeHandler does for WebKit.
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++CreateWebUIURLLoaderFactory(content::BrowserContext* context) {
++  web::BrowserState* browser_state =
++      static_cast<ContentBrowserContext*>(context)->GetBrowserState();
++  mojo::PendingRemote<network::mojom::URLLoaderFactory> factory;
++  base::MakeSelfDeleting<WebUIURLLoaderFactory>(
++      browser_state->GetSharedURLLoaderFactory(),
++      factory.InitWithNewPipeAndPassReceiver());
++  return factory;
++}
++
+ }  // namespace
+ 
+ bool IOSContentBrowserClient::IsHandledURL(const GURL& url) {
+@@ -163,4 +225,41 @@ void IOSContentBrowserClient::ConfigureNetworkContextParams(
+   }
+ }
+ 
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++IOSContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
++    const std::string& scheme,
++    content::FrameTreeNodeId frame_tree_node_id) {
++  // [ios-blink-sideload] See CreateWebUIURLLoaderFactory().
++  if (scheme != content::kChromeUIScheme) {
++    return {};
++  }
++  content::WebContents* web_contents =
++      content::WebContents::FromFrameTreeNodeId(frame_tree_node_id);
++  if (!web_contents) {
++    return {};
++  }
++  return CreateWebUIURLLoaderFactory(web_contents->GetBrowserContext());
++}
++
++void IOSContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
++    int render_process_id,
++    int render_frame_id,
++    const std::optional<url::Origin>& request_initiator_origin,
++    NonNetworkURLLoaderFactoryMap* factories) {
++  // [ios-blink-sideload] Only chrome:// pages load chrome:// resources, such
++  // as the shared ones under chrome://resources.
++  if (!request_initiator_origin ||
++      request_initiator_origin->scheme() != content::kChromeUIScheme) {
++    return;
++  }
++  content::RenderFrameHost* render_frame_host =
++      content::RenderFrameHost::FromID(render_process_id, render_frame_id);
++  if (!render_frame_host) {
++    return;
++  }
++  factories->emplace(
++      content::kChromeUIScheme,
++      CreateWebUIURLLoaderFactory(render_frame_host->GetBrowserContext()));
++}
++
+ }  // namespace web
+diff --git a/ios/web/content/init/ios_content_browser_client.h b/ios/web/content/init/ios_content_browser_client.h
+index 48875befa85e43bd18357cac86e7752f87a01aaa..7151e98aed94b6f1be2b049d172e6a96a041c7fd 100644
+--- a/ios/web/content/init/ios_content_browser_client.h
++++ b/ios/web/content/init/ios_content_browser_client.h
+@@ -45,6 +45,16 @@ class IOSContentBrowserClient : public content::ContentBrowserClient {
+       network::mojom::NetworkContextParams* network_context_params,
+       cert_verifier::mojom::CertVerifierCreationParams*
+           cert_verifier_creation_params) override;
++  // [ios-blink-sideload] chrome:// pages, from Chrome's iOS WebUI.
++  mojo::PendingRemote<network::mojom::URLLoaderFactory>
++  CreateNonNetworkNavigationURLLoaderFactory(
++      const std::string& scheme,
++      content::FrameTreeNodeId frame_tree_node_id) override;
++  void RegisterNonNetworkSubresourceURLLoaderFactories(
++      int render_process_id,
++      int render_frame_id,
++      const std::optional<url::Origin>& request_initiator_origin,
++      NonNetworkURLLoaderFactoryMap* factories) override;
+ };
+ 
+ }  // namespace web
+diff --git a/ios/web/content/js_messaging/content_web_frames_manager.mm b/ios/web/content/js_messaging/content_web_frames_manager.mm
+index 6883106f53b2c9fab0d9337b598003a006b77045..48d0b21dc58a54afed240911dc59797f747adf99 100644
+--- a/ios/web/content/js_messaging/content_web_frames_manager.mm
++++ b/ios/web/content/js_messaging/content_web_frames_manager.mm
+@@ -266,6 +266,15 @@ ScriptMessage message_for_handler(
+       script_message.is_user_interacting(), script_message.is_main_frame(),
+       script_message.request_url(), script_message.security_origin());
+ 
++  // [ios-blink-sideload] chrome.send() from a chrome:// page (web_ui.js posts
++  // to "WebUIMessage"). WebUIMessagingJavaScriptFeature handles it for WebKit,
++  // but casts the WebState to WebStateImpl, so it isn't among the features
++  // here: give the message to this WebState's WebUI instead.
++  if (*handler_name == "WebUIMessage") {
++    content_web_state_->HandleWebUIMessage(message_for_handler);
++    return;
++  }
++
+   js_feature_manager_->ScriptMessageReceived(message_for_handler, *handler_name,
+                                              content_web_state_);
+ }
+diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
+index e8a5525584201c2a23d7eccac05ed1ef09d83e5c..c98bcd1edd411fd4a35df5ae5a2a7f961d595e7f 100644
+--- a/ios/web/content/web_state/content_web_state.h
++++ b/ios/web/content/web_state/content_web_state.h
+@@ -49,6 +49,9 @@ class WebContents;
+ 
+ namespace web {
+ 
++class ScriptMessage;
++class WebUIIOS;
++
+ // ContentWebState is an implementation of WebState that's based on WebContents.
+ class ContentWebState : public WebState,
+                         public content::WebContentsObserver,
+@@ -170,12 +173,21 @@ class ContentWebState : public WebState,
+   void CreateFullPagePdf(base::OnceCallback<void(NSData*)> callback) override;
+   void CloseMediaPresentations() override;
+ 
++  // [ios-blink-sideload] Handles a chrome.send() message from a chrome://
++  // page (posted to the "WebUIMessage" handler), as WebStateImpl does.
++  void HandleWebUIMessage(const ScriptMessage& script_message);
++  // [ios-blink-sideload] As WebStateImpl does: the WebUI's MojoFacade expects
++  // one, and the default is null.
++  InterfaceBinder* GetInterfaceBinderForMainFrame() override;
++
+  protected:
+   // WebContentsObserver
+   void DidStartNavigation(
+       content::NavigationHandle* navigation_handle) override;
+   void DidRedirectNavigation(
+       content::NavigationHandle* navigation_handle) override;
++  void ReadyToCommitNavigation(
++      content::NavigationHandle* navigation_handle) override;
+   void DidFinishNavigation(
+       content::NavigationHandle* navigation_handle) override;
+   void PrimaryPageChanged(content::Page& page) override;
+@@ -259,6 +271,11 @@ class ContentWebState : public WebState,
+                   WebStateID unique_identifier,
+                   std::unique_ptr<SerializedState> serialized_state);
+ 
++  // [ios-blink-sideload] Creates the WebUI of the chrome:// page at `url`, if
++  // Chrome has one, as WebStateImpl does, or clears it.
++  void CreateWebUI(const GURL& url);
++  void ClearWebUI();
++
+   // Helper method to register notification observers.
+   void RegisterNotificationObservers();
+   void OnKeyboardShow(NSNotification* notification);
+@@ -289,6 +306,11 @@ class ContentWebState : public WebState,
+   // microphone, once asked. Kept until another page shows, as WebKit does.
+   std::optional<bool> camera_allowed_;
+   std::optional<bool> microphone_allowed_;
++  // [ios-blink-sideload] See GetInterfaceBinderForMainFrame().
++  InterfaceBinder interface_binder_{this};
++  // [ios-blink-sideload] The WebUI of the chrome:// page being shown or loaded:
++  // it registers the page's data sources and handles its messages.
++  std::unique_ptr<WebUIIOS> web_ui_;
+   id keyboard_showing_observer_;
+   id keyboard_hiding_observer_;
+   int keyboard_height_ = 0;
+diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
+index 7e09ba98844196a87b31ce2683c3809756f5eb49..4aefd29808451a18206ea496ba32e2c8813096a7 100644
+--- a/ios/web/content/web_state/content_web_state.mm
++++ b/ios/web/content/web_state/content_web_state.mm
+@@ -16,12 +16,17 @@
+ #import "components/embedder_support/ios/delegate/color_chooser/color_chooser_ios.h"
+ #import "components/embedder_support/ios/delegate/file_chooser/file_select_helper_ios.h"
+ #import "components/javascript_dialogs/tab_modal_dialog_manager.h"
++#import "content/public/browser/child_process_security_policy.h"
+ #import "content/public/browser/file_select_listener.h"
+ #import "content/public/browser/javascript_dialog_manager.h"
+ #import "content/public/browser/media_capture_devices.h"
+ #import "content/public/browser/navigation_entry.h"
++#import "content/public/browser/navigation_handle.h"
++#import "content/public/browser/render_frame_host.h"
++#import "content/public/browser/render_process_host.h"
+ #import "content/public/browser/visibility.h"
+ #import "content/public/browser/web_contents.h"
++#import "content/public/common/url_constants.h"
+ #import "ios/web/content/content_browser_context.h"
+ #import "ios/web/content/navigation/content_navigation_context.h"
+ #import "ios/web/content/web_state/content_web_state_builder.h"
+@@ -31,6 +36,7 @@
+ #import "ios/web/public/content_type_util.h"
+ #import "ios/web/public/favicon/favicon_url.h"
+ #import "ios/web/public/find_in_page/crw_find_interaction.h"
++#import "ios/web/public/js_messaging/script_message.h"
+ #import "ios/web/public/navigation/navigation_item.h"
+ #import "ios/web/public/navigation/navigation_util.h"
+ #import "ios/web/public/navigation/web_state_policy_decider.h"
+@@ -41,6 +47,9 @@
+ #import "ios/web/public/web_client.h"
+ #import "ios/web/public/web_state_delegate.h"
+ #import "ios/web/public/web_state_observer.h"
++#import "ios/web/public/webui/web_ui_ios_controller.h"
++#import "ios/web/webui/web_ui_ios_controller_factory_registry.h"
++#import "ios/web/webui/web_ui_ios_impl.h"
+ #import "net/cert/x509_util.h"
+ #import "net/cert/x509_util_apple.h"
+ #import "services/network/public/mojom/referrer_policy.mojom-shared.h"
+@@ -215,6 +224,9 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ }
+ 
+ ContentWebState::~ContentWebState() {
++  // [ios-blink-sideload] The WebUI uses this WebState, destroy it first, as
++  // WebStateImpl does.
++  ClearWebUI();
+   WebContentsObserver::Observe(nullptr);
+   for (auto& observer : observers_) {
+     observer.WebStateDestroyed(this);
+@@ -675,11 +687,75 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ 
+ void ContentWebState::CloseMediaPresentations() {}
+ 
++void ContentWebState::HandleWebUIMessage(const ScriptMessage& script_message) {
++  // [ios-blink-sideload] With the checks WebUIMessagingJavaScriptFeature makes
++  // for WebKit: only from the main frame of the chrome:// page it came from.
++  if (!web_ui_ || !script_message.is_main_frame()) {
++    return;
++  }
++  std::optional<GURL> url = script_message.request_url();
++  if (!url || !GetWebClient()->IsAppSpecificURL(*url) ||
++      !script_message.security_origin().IsSameOriginWith(
++          url::Origin::Create(*url))) {
++    return;
++  }
++  const base::DictValue* dict = script_message.legacy_body()
++                                    ? script_message.legacy_body()->GetIfDict()
++                                    : nullptr;
++  if (!dict) {
++    return;
++  }
++  const std::string* message = dict->FindString("message");
++  const base::ListValue* arguments = dict->FindList("arguments");
++  if (!message || !arguments) {
++    return;
++  }
++  web_ui_->ProcessWebUIIOSMessage(*url, *message, *arguments);
++}
++
++WebState::InterfaceBinder* ContentWebState::GetInterfaceBinderForMainFrame() {
++  return &interface_binder_;
++}
++
++void ContentWebState::CreateWebUI(const GURL& url) {
++  // [ios-blink-sideload] As WebStateImpl::RealizedWebState does: the
++  // controller registers the page's data sources (see
++  // IOSContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory()) and
++  // its message handlers.
++  if (web_ui_) {
++    if (web_ui_->GetController()->GetHost() == url.GetHost()) {
++      return;
++    }
++    ClearWebUI();
++  }
++  WebUIIOSControllerFactory* factory =
++      WebUIIOSControllerFactoryRegistry::GetInstance();
++  if (!factory) {
++    return;
++  }
++  auto web_ui = std::make_unique<WebUIIOSImpl>(this);
++  std::unique_ptr<WebUIIOSController> controller =
++      factory->CreateWebUIIOSControllerForURL(web_ui.get(), url);
++  if (!controller) {
++    return;
++  }
++  web_ui->SetController(std::move(controller));
++  web_ui_ = std::move(web_ui);
++}
++
++void ContentWebState::ClearWebUI() {
++  web_ui_.reset();
++}
++
+ void ContentWebState::DidStartNavigation(
+     content::NavigationHandle* navigation_handle) {
+   if (!navigation_handle->IsInPrimaryMainFrame()) {
+     return;
+   }
++  // [ios-blink-sideload] See CreateWebUI().
++  if (GetWebClient()->IsAppSpecificURL(navigation_handle->GetURL())) {
++    CreateWebUI(navigation_handle->GetURL());
++  }
+   auto* context =
+       ContentNavigationContext::GetOrCreate(navigation_handle, this);
+   for (auto& observer : observers_) {
+@@ -699,11 +775,37 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+   }
+ }
+ 
++void ContentWebState::ReadyToCommitNavigation(
++    content::NavigationHandle* navigation_handle) {
++  // [ios-blink-sideload] content only lets processes with its own WebUI
++  // bindings commit chrome:// pages and load their resources, and ends a
++  // renderer that commits one anyway: here the in-process renderer, and the
++  // app with it. Chrome's iOS WebUI doesn't use those bindings, so allow the
++  // renderer to commit the page and request chrome:// URLs.
++  if (!navigation_handle->IsInPrimaryMainFrame() || !web_ui_ ||
++      !navigation_handle->GetURL().SchemeIs(content::kChromeUIScheme)) {
++    return;
++  }
++  const int process_id =
++      navigation_handle->GetRenderFrameHost()->GetProcess()->GetDeprecatedID();
++  content::ChildProcessSecurityPolicy* policy =
++      content::ChildProcessSecurityPolicy::GetInstance();
++  policy->GrantCommitScheme(process_id, content::kChromeUIScheme);
++  policy->GrantRequestScheme(process_id, content::kChromeUIScheme);
++}
++
+ void ContentWebState::DidFinishNavigation(
+     content::NavigationHandle* navigation_handle) {
+   if (!navigation_handle->IsInPrimaryMainFrame()) {
+     return;
+   }
++  // [ios-blink-sideload] As WebStateImpl does: drop the WebUI if the
++  // navigation didn't commit, or committed a page that isn't Chrome's.
++  if (web_ui_ &&
++      (!navigation_handle->HasCommitted() ||
++       !GetWebClient()->IsAppSpecificURL(navigation_handle->GetURL()))) {
++    ClearWebUI();
++  }
+   auto* context =
+       ContentNavigationContext::GetOrCreate(navigation_handle, this);
+   for (auto& observer : observers_) {
+-- 
+2.54.0 (Apple Git-157)
+

@@ -336,6 +336,48 @@ Chrome 菜单里的"在网页中查找…"一直是灰的：Chrome 先问网页�
 
 Chromium 没有 Google 镜头：它的提供方（`ios/chrome/browser/providers/lens/chromium_lens.mm`）创建不出镜头叠层、取景器和控制器，`IsLensSupported()` 返回 false。大部分入口（地址栏、键盘上方、图片的长按菜单）都检查这个函数，镜头叠层的入口却只看策略和默认搜索引擎：底栏的助手按钮显示"Google 智能镜头"，点了只会变灰；菜单里的"使用 Google 智能镜头搜索屏幕内容"点了没反应。`IsLensOverlayEntrypointAvailable()` 也检查 `IsLensSupported()` 后，助手按钮退到下一项"问问 Google"（打开 Google 的 AI 模式网页，能用），菜单项不再出现。模拟器里验证过；新标签页和地址栏本来就没有镜头按钮。
 
+### 0033 选文件像 Safari（`ios/web/content/web_state/content_web_state.mm`、`ios/web/public/web_client.h`、`ios/chrome/browser/web/model/chrome_web_client.mm`、`choose_file/choose_file_tab_helper.mm`）
+
+用户 2026-10-29 说上传文件和 Safari 不一样。Blink 版选文件时，content 调 `ContentWebState::RunFileChooser()`，上游直接交给 `FileSelectHelperIOS`，弹出系统的"文件"选择器（`UIDocumentPickerViewController`；上游在这里留了 TODO crbug.com/40255112）。Safari 和 WebKit 版 Chrome 都是在点的位置弹一个菜单：照片库、拍摄照片或视频、选择文件，并按 `accept` 调整。WebKit 版 Chrome 用的是自己的文件上传面板（`ios/chrome/browser/file_upload_panel`），由 WKWebView 的 `runOpenPanel` 经 `ChromeWebClient::RunOpenPanel()` 和 `ChooseFileTabHelper` 弹出。
+
+补丁把 Blink 版的文件输入框也接到这个面板上：
+- `web::WebClient` 加了 `RunFileChooser()`，带上 content 知道的输入框属性：能否多选、接受的 MIME 类型和扩展名、是否已有文件、有没有 `capture`。
+- `ChromeWebClient` 据此构造面板用的 `ChooseFileEvent`。`ChooseFileTabHelper::RunFileChooser()` 像 `RunOpenPanel()` 一样，把面板放在最近一次点击的位置。
+- 选中的文件按路径交回给网页（`FileSelectListener::FileSelected()`）。文件放在按标签页分开的临时目录里，关掉标签页才删，网页提交表单时读得到。
+- 选文件夹和"另存为"仍用系统的文档选择器。
+- Blink 只告诉我们有没有 `capture`，不说要前置还是后置摄像头，这里用后置。
+
+模拟器里验证过（2026-10-29）：
+- 没写 `accept` 的输入框在点的位置弹出"照片库 / 拍摄照片或视频 / 选择文件"；`image/*` 的第二项变成"拍摄照片"；只收 `.pdf` 的直接打开"文件"。
+- 从照片库选的照片交到了网页，网页读出了全部 1,484,524 字节，开头是 JPEG 文件头；`multiple` 能一次选两张。
+- 点菜单外面或取消"文件"时，网页收到 `cancel` 事件。
+
+模拟器没有摄像头，带 `capture` 的输入框弹的仍是菜单（推测真机上会直接打开相机）。没在真机上验证。
+
+### 0034 chrome:// 页面（`ios/web/content/init/ios_content_browser_client.cc`、`web_state/content_web_state.mm`、`js_messaging/content_web_frames_manager.mm`，以及 content 的 `navigation_url_loader_impl.cc`、`render_frame_host_impl.cc`）
+
+用户 2026-10-29 说 chrome://credits 等打不开。Chrome iOS 的 chrome:// 页面是 iOS 自己的 WebUI，建在 ios/web 上，WebKit 版的流程是：
+- `CRWWebUISchemeHandler` 通过浏览器状态（`ProfileIOS`）的网络栈取页面内容；
+- 那个网络栈用 `URLDataManagerIOSBackend` 处理 chrome 协议，数据源由打开页面时创建的 WebUI 控制器注册；
+- 页面里的 `chrome.send()`（`ui/webui/resources/js/ios/web_ui.js`）发到 "WebUIMessage" 处理器，交给 WebUI 的消息处理函数。
+
+Blink 版这些都没接，一共补了四处：
+
+1. **加载。** `IOSContentBrowserClient` 为 chrome 协议提供加载器，把请求转给浏览器状态的网络栈：导航用 `CreateNonNetworkNavigationURLLoaderFactory()`，chrome:// 页面的子资源用 `RegisterNonNetworkSubresourceURLLoaderFactories()`。
+   - content 对自己的 WebUI 协议（包括 chrome）有专门的捷径，直接用它自己的 WebUI 加载器、不问嵌入方，结果是 ERR_INVALID_URL。所以在 iOS 上改了 content：导航先问嵌入方（`NavigationURLLoaderImpl::Start()`）；子资源让嵌入方的加载器顶替 content 的（`RenderFrameHostImpl` 里的 `emplace` 改成 `insert_or_assign`，循环之前表里只有那一项）。
+   - 转发时去掉请求里的 DevTools 限速标识（`throttling_profile_id`）。浏览器状态的网络栈跑在 IO 线程上，而限速状态是进程级的，只能在 content 网络服务的线程上用。不去掉的话，打开过 chrome:// 页面后，下一个普通网页就会触发 `ThrottlingController` 的线程检查 DCHECK（模拟器里遇到过）。真机上没有 DCHECK，会变成两个线程同时读写（推测会出问题）。
+2. **WebUI 控制器。** `ContentWebState` 在导航到 chrome:// 开始时创建 WebUI 控制器（和 `WebStateImpl` 一样），导航失败或去了别的网址时清掉。控制器里的 `MojoFacade` 要用主框架的接口绑定器，`ContentWebState` 原来返回空指针，第一个页面一加载完就崩；现在有了一个。
+3. **提交权限。** content 只允许有 content WebUI 绑定的渲染进程提交 chrome:// 页面，否则当成恶意消息结束那个进程，单进程下就是结束整个 app。Chrome iOS 的 WebUI 不用这些绑定，所以在提交前（`ReadyToCommitNavigation`）给渲染进程授权 chrome 协议的提交和请求。content 在提交之后才检查（`ValidateDidCommitParams`），这时授权来得及（读源码确认）。
+4. **`chrome.send()`。** `WebUIMessagingJavaScriptFeature` 处理这类消息时，会把 WebState 强转成 WebKit 版的 `WebStateImpl`，Blink 版不能用；而且 0008 只保留了翻译要的脚本功能，它本来也不在列表里。现在在 content 版的脚本消息分发处（`ContentWebFramesManager`）拦下 "WebUIMessage"，按同样的规则检查（只收主框架、chrome:// 页面、来源一致），再交给 `ContentWebState` 的 WebUI。
+
+模拟器里验证过（2026-10-29）：
+- chrome://version 显示版本、系统、用户代理和命令行，带 Chromium 标志；
+- chrome://flags 列出实验功能（用 `chrome.send()` 请求，处理函数再调用页面里的 JS 返回）；
+- chrome://credits 是完整的许可证列表（见第 4 节的 `generate_about_credits`）；
+- 打开 chrome:// 页面后再开维基百科、GitHub、bilibili 都正常。
+
+用 Mojo 的 WebUI（通过 `MojoFacade`）还不行：chrome://chrome-urls 只有标题、没有列表。`MojoFacade` 要在主框架里执行异步 JS（`ExecuteAsyncJavaScript`）来取页面发出的 Mojo 消息，而 Blink 版的 `ContentWebFrame` 还没实现（上游 TODO crbug.com/507056709）。没在真机上验证。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`，159 上已删）
 
 **升到 159 后不再需要，已经删掉。** 上游 2026-10-27 自己修了下面这两处（V8 `c8b70908`「Fix build break after TrustedCast and raw() hardening」、`d1204af1`「Fix build break after SharedFunctionInfo flags move」），159 的 V8（`0388bc74`）不打补丁，DrumBrake 在模拟器和真机两种配置下都编得过，模拟器里的测试页结果正常（2026-10-29 验证过）。下面是 158 时的记录。
@@ -364,6 +406,7 @@ Chromium 没有 Google 镜头：它的提供方（`ios/chrome/browser/providers/
 | `v8_enable_sandbox = false`，`cppgc_enable_caged_heap = false` | 两者都要预留很大的虚拟地址空间，侧载 app 未必有 extended-virtual-addressing（Blinker Fluid 在真机上用的就是这组） |
 | `v8_enable_drumbrake = true` | 免 JIT 时 WebAssembly 靠 DrumBrake 解释器跑，tvOS 也是这么配的。上游 CI 不编 DrumBrake：158 的 V8 上要靠 V8 补丁 0201 才编得过，159 的 V8 上游已经修好（见第 3 节） |
 | `v8_drumbrake_bounds_checks = true` | Wasm 内存访问做显式边界检查。iOS arm64 默认不做，改用 Wasm 内存四周 8 GB 的保护区加 V8 的陷阱处理器来发现越界。但 content 在 iOS 上默认不开陷阱处理器（`features::kWebAssemblyTrapHandler`），这时 DrumBrake 在第一次实例化模块时就 `CHECK` 崩溃（`wasm-interpreter.cc`），而每块 Wasm 内存预留 8 GB 地址空间，侧载 app 也未必给得起。显式检查两样都不需要，代价是访存稍慢 |
+| `generate_about_credits = true` | chrome://credits 列出 Chromium 和所有第三方代码的许可证。默认只有官方构建才用 `tools/licenses/licenses.py` 生成（`components/resources/BUILD.gn`），其他构建只有一张占位页（"This is sample credits page"）。公开发布的二进制应当带上许可证，打开后 chrome://credits 是完整的列表（2026-10-29，模拟器里验证过；生成的页面 5.5 MB） |
 
 `v8/gni/v8.gni` 里 tvOS（"runs in single process mode and is not allowed to use JIT"）的配置还有 `v8_enable_lite_mode = true`、`v8_enable_turbofan = false`。我们没开：它们能让包更小，但以后想加 JIT 就得重新编。如果内存吃紧可以试。
 

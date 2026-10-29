@@ -1,0 +1,284 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Thu, 29 Oct 2026 15:51:04 +0800
+Subject: [PATCH] iOS sideload: Safari's file upload menu
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+content showed the system's document picker for every file input,
+where Safari, and Chrome on WebKit, show a menu at the input: the photo
+library, the camera or Files, depending on what the input accepts
+(crbug.com/40255112). Hand file inputs to Chrome's file upload panel,
+the one WKWebView's open panel uses. WebClient::RunFileChooser() takes
+what content knows about the input: whether it takes several files, the
+MIME types and extensions it accepts, whether it has a file already and
+whether it asks for the camera. ChromeWebClient builds the
+ChooseFileEvent the panel works from, and ChooseFileTabHelper places the
+panel where the user tapped, as RunOpenPanel() does. The chosen files go
+back to the page by path. Folders and saving keep the document picker.
+
+Status: verified at Chromium 3313f827 in the iOS 27 simulator, with a
+page that reports each input's files and reads the first one's bytes:
+an input without accept shows 照片库, 拍摄照片或视频 and 选择文件 at the
+input; image/* shows 拍摄照片 instead; .pdf goes straight to Files; a
+photo from the library reached the page (IMG_0005.jpeg, all 1484524
+bytes read, starting with a JPEG header); multiple took two photos;
+tapping outside the menu or cancelling Files fired cancel. The camera
+can't be checked in the simulator, where an input with capture shows
+the menu. Not checked on a device.
+
+diff --git a/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h b/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h
+index 36f36cf0e41608901fc1a5b23c3226cd57e9f49f..5cbae1fa1e3702715d983e31f28c0b9aae81243c 100644
+--- a/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h
++++ b/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h
+@@ -64,6 +64,10 @@ class ChooseFileTabHelper : public web::WebStateUserData<ChooseFileTabHelper>,
+                     WKFrameInfo* frame,
+                     base::OnceCallback<void(NSArray<NSURL*>*)> completion)
+       API_AVAILABLE(ios(18.4));
++  // [ios-blink-sideload] Same as `RunOpenPanel()`, for the Blink port, which
++  // describes the file input in `event` itself.
++  void RunFileChooser(ChooseFileEvent event,
++                      base::OnceCallback<void(NSArray<NSURL*>*)> completion);
+ 
+   // Set the last ChooseFileEvent.
+   void SetLastChooseFileEvent(ChooseFileEvent event);
+diff --git a/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.mm b/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.mm
+index 564111c0e50cfbad66b3be116288e7b98e244dfc..f2bfa43a9f90b0459af9c0b55ef59a9a81733854 100644
+--- a/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.mm
++++ b/ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.mm
+@@ -155,6 +155,33 @@
+   [file_upload_panel_handler_ showFileUploadPanel];
+ }
+ 
++void ChooseFileTabHelper::RunFileChooser(
++    ChooseFileEvent event,
++    base::OnceCallback<void(NSArray<NSURL*>*)> completion) {
++  // [ios-blink-sideload] As in RunOpenPanel(), which WebKit calls instead.
++  web::WebState* web_state = observation_.GetSource();
++  if (!web_state || web_state->IsBeingDestroyed() || !web_state->IsVisible() ||
++      is_pending_navigation_) {
++    std::move(completion).Run(nil);
++    return;
++  }
++
++  // Present the panel where the user tapped the file input, as RunOpenPanel()
++  // does when the tap is recent.
++  LastTapLocationTabHelper* last_tap_helper =
++      LastTapLocationTabHelper::FromWebState(web_state);
++  if (last_tap_helper &&
++      base::TimeTicks::Now() - last_tap_helper->GetLastTapTime() <
++          base::Seconds(1) &&
++      !UIAccessibilityIsVoiceOverRunning()) {
++    event.screen_location = last_tap_helper->GetLastTapPoint();
++  }
++
++  StartChoosingFiles(std::make_unique<ChooseFileControllerImpl>(
++      std::move(event), std::move(completion)));
++  [file_upload_panel_handler_ showFileUploadPanel];
++}
++
+ void ChooseFileTabHelper::SetLastChooseFileEvent(ChooseFileEvent event) {
+   if (is_pending_navigation_) {
+     return;
+diff --git a/ios/chrome/browser/web/model/chrome_web_client.h b/ios/chrome/browser/web/model/chrome_web_client.h
+index 3eb0c2ee6246e3b005116d86a0c477e237ad30fe..df50d730cbc5599935c58c30da5267dc5ab1b8bc 100644
+--- a/ios/chrome/browser/web/model/chrome_web_client.h
++++ b/ios/chrome/browser/web/model/chrome_web_client.h
+@@ -80,6 +80,15 @@ class ChromeWebClient : public web::WebClient {
+                     WKFrameInfo* frame,
+                     base::OnceCallback<void(NSArray<NSURL*>*)> completion)
+       const override API_AVAILABLE(ios(18.4));
++  void RunFileChooser(
++      web::WebState* web_state,
++      bool allow_multiple_files,
++      bool only_allow_directory,
++      bool has_selected_file,
++      const std::vector<std::string>& accept_mime_types,
++      const std::vector<std::string>& accept_file_extensions,
++      bool capture,
++      base::OnceCallback<void(NSArray<NSURL*>*)> completion) const override;
+   web::JSErrorReportLoggingLevel GetJSErrorReportLoggingLevel(
+       web::BrowserState* browser_state) const override;
+   web::CobaltController* GetCobaltController(
+diff --git a/ios/chrome/browser/web/model/chrome_web_client.mm b/ios/chrome/browser/web/model/chrome_web_client.mm
+index 83a56e872bc9eee23b67e42427a7d6aa1ede39a6..d91f745425a2ab43a4e2dd3995f9e017f2e35103 100644
+--- a/ios/chrome/browser/web/model/chrome_web_client.mm
++++ b/ios/chrome/browser/web/model/chrome_web_client.mm
+@@ -689,6 +689,35 @@ bool WillHandleWebBrowserJavascriptURLs(GURL* url, web::BrowserState*) {
+   tab_helper->RunOpenPanel(parameters, frame, std::move(completion));
+ }
+ 
++void ChromeWebClient::RunFileChooser(
++    web::WebState* source,
++    bool allow_multiple_files,
++    bool only_allow_directory,
++    bool has_selected_file,
++    const std::vector<std::string>& accept_mime_types,
++    const std::vector<std::string>& accept_file_extensions,
++    bool capture,
++    base::OnceCallback<void(NSArray<NSURL*>*)> completion) const {
++  // [ios-blink-sideload] The Blink port's file inputs get the same panel as
++  // WebKit's: photo library, camera or files, depending on what they accept.
++  ChooseFileTabHelper* tab_helper = ChooseFileTabHelper::FromWebState(source);
++  CHECK(tab_helper);
++  // Blink only says whether the input has a capture attribute, not which
++  // camera it asks for: use the one on the back.
++  tab_helper->RunFileChooser(
++      ChooseFileEvent::Builder()
++          .SetWebState(source)
++          .SetAllowMultipleFiles(allow_multiple_files)
++          .SetOnlyAllowDirectory(only_allow_directory)
++          .SetHasSelectedFile(has_selected_file)
++          .SetAcceptMimeTypes(accept_mime_types)
++          .SetAcceptFileExtensions(accept_file_extensions)
++          .SetCapture(capture ? ChooseFileCaptureType::kEnvironment
++                              : ChooseFileCaptureType::kNone)
++          .Build(),
++      std::move(completion));
++}
++
+ web::JSErrorReportLoggingLevel ChromeWebClient::GetJSErrorReportLoggingLevel(
+     web::BrowserState* browser_state) const {
+   if (!crash_helper::common::UserEnabledUploading()) {
+diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
+index 766cb8456e902d2c5113b6f7b455a5207f7d3a60..7e09ba98844196a87b31ce2683c3809756f5eb49 100644
+--- a/ios/web/content/web_state/content_web_state.mm
++++ b/ios/web/content/web_state/content_web_state.mm
+@@ -8,6 +8,7 @@
+ #import <memory>
+ 
+ #import "base/apple/foundation_util.h"
++#import "base/functional/bind.h"
+ #import "base/functional/callback_helpers.h"
+ #import "base/notimplemented.h"
+ #import "base/strings/sys_string_conversions.h"
+@@ -37,6 +38,7 @@
+ #import "ios/web/public/session/proto/metadata.pb.h"
+ #import "ios/web/public/session/proto/proto_util.h"
+ #import "ios/web/public/session/proto/storage.pb.h"
++#import "ios/web/public/web_client.h"
+ #import "ios/web/public/web_state_delegate.h"
+ #import "ios/web/public/web_state_observer.h"
+ #import "net/cert/x509_util.h"
+@@ -943,13 +945,63 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+       web_contents, color, suggestions);
+ }
+ 
+-// TODO(crbug.com/40255112): Need to consider showing a context menu that
+-// contains 'Photo Library', 'Take Photo', and 'Choose File' sub menus as
+-// browsers based on WebKit.
++namespace {
++
++// [ios-blink-sideload] Gives the page the files chosen in Chrome's file upload
++// panel (see RunFileChooser()).
++void FilesChosen(scoped_refptr<content::FileSelectListener> listener,
++                 blink::mojom::FileChooserParams::Mode mode,
++                 NSArray<NSURL*>* file_urls) {
++  std::vector<blink::mojom::FileChooserFileInfoPtr> files;
++  for (NSURL* url in file_urls) {
++    if (url.fileURL) {
++      files.push_back(blink::mojom::FileChooserFileInfo::NewNativeFile(
++          blink::mojom::NativeFileInfo::New(base::apple::NSURLToFilePath(url),
++                                            std::u16string(),
++                                            std::vector<std::u16string>())));
++    }
++  }
++  if (files.empty()) {
++    listener->FileSelectionCanceled();
++    return;
++  }
++  listener->FileSelected(std::move(files), base::FilePath(), mode);
++}
++
++}  // namespace
++
+ void ContentWebState::RunFileChooser(
+     content::RenderFrameHost* render_frame_host,
+     scoped_refptr<content::FileSelectListener> listener,
+     const blink::mojom::FileChooserParams& params) {
++  // [ios-blink-sideload] Show Chrome's file upload panel, as WKWebView does
++  // (crbug.com/40255112): like Safari, it offers the photo library, the camera
++  // and Files, depending on what the input accepts, where content went
++  // straight to Files. Folders and saving still go to the system's document
++  // picker.
++  using Mode = blink::mojom::FileChooserParams::Mode;
++  if ((params.mode == Mode::kOpen || params.mode == Mode::kOpenMultiple) &&
++      GetWebClient()->CanRunOpenPanel(this)) {
++    // Blink gives the accept attribute's lowercase MIME types and extensions
++    // (with their leading dot) together.
++    std::vector<std::string> accept_mime_types;
++    std::vector<std::string> accept_file_extensions;
++    for (const std::u16string& accept_type : params.accept_types) {
++      std::string type = base::UTF16ToUTF8(accept_type);
++      if (type.starts_with('.')) {
++        accept_file_extensions.push_back(std::move(type));
++      } else if (!type.empty()) {
++        accept_mime_types.push_back(std::move(type));
++      }
++    }
++    GetWebClient()->RunFileChooser(
++        this, params.mode == Mode::kOpenMultiple,
++        /*only_allow_directory=*/false,
++        /*has_selected_file=*/!params.selected_files.empty(),
++        accept_mime_types, accept_file_extensions, params.use_media_capture,
++        base::BindOnce(&FilesChosen, std::move(listener), params.mode));
++    return;
++  }
+   web_contents_delegate_ios::FileSelectHelperIOS::RunFileChooser(
+       render_frame_host, listener, params);
+ }
+diff --git a/ios/web/public/web_client.h b/ios/web/public/web_client.h
+index 36a0f65c5bd284447fb5552caddc829a6e9b8e63..6978b8db21989b11b6c0771e6c70aad3a51f46be 100644
+--- a/ios/web/public/web_client.h
++++ b/ios/web/public/web_client.h
+@@ -242,6 +242,22 @@ class WebClient {
+       WKFrameInfo* frame,
+       base::OnceCallback<void(NSArray<NSURL*>*)> completion) const
+       API_AVAILABLE(ios(18.4));
++  // [ios-blink-sideload] Like RunOpenPanel(), for the Blink port, which knows
++  // the file input asking for files: whether it takes several files or a
++  // folder, whether it has a file already, the MIME types and file extensions
++  // (with their leading dot) its accept attribute lists, and whether its
++  // capture attribute asks for the camera. Calls `completion` with the URLs of
++  // the files the user selected, or nil. Only called if `CanRunOpenPanel()`
++  // returns true for `web_state`.
++  virtual void RunFileChooser(
++      web::WebState* web_state,
++      bool allow_multiple_files,
++      bool only_allow_directory,
++      bool has_selected_file,
++      const std::vector<std::string>& accept_mime_types,
++      const std::vector<std::string>& accept_file_extensions,
++      bool capture,
++      base::OnceCallback<void(NSArray<NSURL*>*)> completion) const;
+ 
+   virtual JSErrorReportLoggingLevel GetJSErrorReportLoggingLevel(
+       BrowserState* browser_state) const;
+diff --git a/ios/web/web_client.mm b/ios/web/web_client.mm
+index 202f0a0752fe78ac3a5293ff6488054063f42bfb..1c1d14405609cde95a52fb197f4979df5dbe5a26 100644
+--- a/ios/web/web_client.mm
++++ b/ios/web/web_client.mm
+@@ -149,6 +149,19 @@ void SetWebClient(WebClient* client) {
+                       "then it must override RunOpenPanel().";
+ }
+ 
++void WebClient::RunFileChooser(
++    web::WebState* web_state,
++    bool allow_multiple_files,
++    bool only_allow_directory,
++    bool has_selected_file,
++    const std::vector<std::string>& accept_mime_types,
++    const std::vector<std::string>& accept_file_extensions,
++    bool capture,
++    base::OnceCallback<void(NSArray<NSURL*>*)> completion) const {
++  // [ios-blink-sideload] No selection.
++  std::move(completion).Run(nil);
++}
++
+ JSErrorReportLoggingLevel WebClient::GetJSErrorReportLoggingLevel(
+     BrowserState* browser_state) const {
+   return JSErrorReportLoggingLevel::NONE;
+-- 
+2.54.0 (Apple Git-157)
+
