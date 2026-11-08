@@ -46,6 +46,14 @@ lower with a gray band in portrait, and the DCHECK). chatgpt.com, opened
 after a rotation and then rotated both ways, was drawn whole (before: its
 lower part red). Not checked on a device.
 
+Rebased onto 34d81e7b (159.0.8149.0): upstream replaced IsTesting() with
+use_fixed_size_for_testing_ in GetCompositorViewportPixelSize() and
+UpdateScreenInfo(). Re-verified there in the iOS 27 simulator the same
+way: 694x313 (0037 keeps the page out of the notch) with a 812x375
+landscape-primary screen turned left, drawn whole beside the App Bar in
+both landscapes, and 375x631 back in portrait, one resize event per
+turn, the same as at 3313f827.
+
 diff --git a/content/browser/renderer_host/browser_compositor_ios.h b/content/browser/renderer_host/browser_compositor_ios.h
 index 936fac39e33f2b6c74f345e64a2f893ae83b5858..e0ea2f9cdab9bd7c1dc9d78f1a2c925c81fddf5b 100644
 --- a/content/browser/renderer_host/browser_compositor_ios.h
@@ -76,7 +84,7 @@ index 7b33792a50584d3bd0b496ffa10db10ea5097f72..84bc17dc874ec3e86c6b1fe360a66a22
      compositor_->SetBackgroundColor(background_color_);
    }
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
-index fa8b9a090fe32b358bac415aedd834b057a35e5d..0d4bf31e4213680fe529d24e4affee4d7ae91c12 100644
+index e38c6f4e25992d21cdbef4223dfa631039f3553f..bc8ebf032006cb54afa515c9c2214990b4b538dd 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.h
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.h
 @@ -23,6 +23,7 @@
@@ -108,16 +116,16 @@ index fa8b9a090fe32b358bac415aedd834b057a35e5d..0d4bf31e4213680fe529d24e4affee4d
    void TransformPointToRootSurface(gfx::PointF* point) override;
    bool TransformPointToCoordSpaceForView(
        const gfx::PointF& point,
-@@ -228,6 +234,8 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
-   bool CanBecomeFirstResponderForTesting() const;
-   bool CanResignFirstResponderForTesting() const;
+@@ -233,6 +239,8 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+     use_fixed_size_for_testing_ = use_fixed_size;
+   }
    void ContentInsetChanged();
 +  // [ios-blink-sideload] Called when the scroll view's contentOffset changes.
 +  void ContentOffsetChanged();
  #if !BUILDFLAG(IS_IOS_TVOS)
    void OnKeyboardVisibilityChanged();
  #endif  // !BUILDFLAG(IS_IOS_TVOS)
-@@ -315,6 +323,10 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+@@ -323,6 +331,10 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
    // [ios-blink-sideload] Displays CALayerParams delivered to
    // UpdateCALayerTree() on the view's own layer, as the tvOS port does.
    std::unique_ptr<ui::DisplayCALayerTree> display_tree_;
@@ -129,10 +137,10 @@ index fa8b9a090fe32b358bac415aedd834b057a35e5d..0d4bf31e4213680fe529d24e4affee4d
  };
  
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index f58bc11361e8523799938beb58304cb10c9edc98..65581bca426dda51419bd7343ca2cb735475b5fb 100644
+index b9dc24e756142a67f8e628bcc5a893f10e218a31..bac9d1a71327fa9cec7e2ba546c1ee22a7745e33 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
-@@ -402,7 +402,17 @@ bool IsTesting() {
+@@ -403,7 +403,17 @@ bool IsTesting() {
    host()->SynchronizeVisualProperties();
  }
  
@@ -151,7 +159,7 @@ index f58bc11361e8523799938beb58304cb10c9edc98..65581bca426dda51419bd7343ca2cb73
  
  void RenderWidgetHostViewIOS::
      RequestSuccessfulPresentationTimeFromHostOrDelegate(
-@@ -489,6 +499,15 @@ bool IsTesting() {
+@@ -498,6 +508,15 @@ bool IsTesting() {
    }
  }
  
@@ -167,7 +175,7 @@ index f58bc11361e8523799938beb58304cb10c9edc98..65581bca426dda51419bd7343ca2cb73
  void RenderWidgetHostViewIOS::OnSynchronizedDisplayPropertiesChanged(
      bool rotation) {
    host()->SynchronizeVisualProperties();
-@@ -971,15 +990,19 @@ bool IsTesting() {
+@@ -978,15 +997,19 @@ bool IsTesting() {
  }
  
  void RenderWidgetHostViewIOS::UpdateFrameBounds() {
@@ -189,9 +197,9 @@ index f58bc11361e8523799938beb58304cb10c9edc98..65581bca426dda51419bd7343ca2cb73
 +  frameBounds.origin = CGPointMake(scrollOffset.x + parentInset.left,
 +                                   scrollOffset.y + parentInset.top);
  
-   // If we are scrolling we don't resize the WebView immediately.
-   if (!is_scrolling_ && !IsTesting()) {
-@@ -1019,6 +1042,11 @@ bool IsTesting() {
+   UpdateViewBounds(gfx::Rect(frameBounds));
+   [ui_view_->view_ setFrame:frameBounds];
+@@ -1031,6 +1054,11 @@ bool IsTesting() {
    ApplyRootScrollOffsetChanged(root_scroll_offset, /*force=*/false);
  }
  
@@ -203,13 +211,10 @@ index f58bc11361e8523799938beb58304cb10c9edc98..65581bca426dda51419bd7343ca2cb73
  void RenderWidgetHostViewIOS::ContentInsetChanged() {
    if (last_root_scroll_offset_) {
      ApplyRootScrollOffsetChanged(*last_root_scroll_offset_, /*force=*/true);
-@@ -1181,9 +1209,18 @@ bool IsTesting() {
+@@ -1193,9 +1221,17 @@ bool IsTesting() {
  }
  
  gfx::Size RenderWidgetHostViewIOS::GetCompositorViewportPixelSize() {
--  return gfx::ScaleToCeiledSize(
--      IsTesting() ? GetRequestedRendererSize() : GetScreenInfo().rect.size(),
--      GetDeviceScaleFactor());
 +  // [ios-blink-sideload] The size the browser compositor shows the page's
 +  // surface at, as on the Mac, instead of the screen's: a new surface id comes
 +  // with every change of that size (BrowserCompositorIOS::
@@ -218,13 +223,13 @@ index f58bc11361e8523799938beb58304cb10c9edc98..65581bca426dda51419bd7343ca2cb73
 +  // in the simulator, a cropped page next to a red area on a phone), and a page
 +  // that started while the screen info was stale only covered part of the
 +  // view.
-+  return gfx::ScaleToCeiledSize(IsTesting()
-+                                    ? GetRequestedRendererSize()
+   return gfx::ScaleToCeiledSize(use_fixed_size_for_testing_
+                                     ? GetRequestedRendererSize()
+-                                    : GetScreenInfo().rect.size(),
 +                                    : browser_compositor_->GetRendererSize(),
-+                                GetDeviceScaleFactor());
+                                 GetDeviceScaleFactor());
  }
  
- void RenderWidgetHostViewIOS::ComputeDisplayFeature() {
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm b/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm
 index d1ccf08a691341e5dccd9c3dfc75485aeb38ad16..aff5a86fa346563b542bba9a2acc787f1ae3eda3 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios_uiview.mm

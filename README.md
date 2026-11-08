@@ -2,7 +2,7 @@
 
 用官方 Chromium 源码编出"**Chrome iOS 原生界面 + Blink 内核**"的浏览器，侧载到没有越狱、也没有 Apple 浏览器引擎权限的 iPhone 上。目标设备：iPhone 13 mini（A15，4 GB 内存），iOS 27。
 
-> **当前状态：能用，已发正式版。** 模拟器和真机（iPhone 13 mini，iOS 27）上都编译、运行过，[Releases](https://github.com/Mr-Drinking/Chromium-iOS/releases) 里有未签名的 IPA（最新的 159.0.8129.0 正式版还只在模拟器里测过）。已知问题（发热、卡顿、没有 JIT、没有无痕模式等）和进度见 [docs/status.md](docs/status.md)。
+> **当前状态：能用。** 模拟器和真机（iPhone 13 mini，iOS 27）上都编译、运行过，[Releases](https://github.com/Mr-Drinking/Chromium-iOS/releases) 里有未签名的 IPA（都标成了预发布，最新的是 159.0.8129.0 的测试版 5）。2026-11-08 源码升到了 159.0.8149.0，模拟器里回归过，这个版本的安装包还没发布。已知问题（发热、卡顿、没有 JIT、没有无痕模式等）和进度见 [docs/status.md](docs/status.md)。
 
 ## 原理
 
@@ -28,7 +28,7 @@
 
 ## 快速开始（在 Mac 上）
 
-固定版本：Chromium `3313f827`（159.0.8129.0，2026-10-28 官方 iOS Blink CI 编译通过的提交）。需要 Xcode 26 或更新（推荐 Xcode 27）、约 200 GB 磁盘。
+固定版本：Chromium `34d81e7b`（159.0.8149.0，2026-11-07 官方 iOS Blink CI 编译通过的提交）。需要 Xcode 26 或更新（推荐 Xcode 27）、约 200 GB 磁盘。
 
 ```bash
 scripts/00-check-env.sh                  # 检查 Xcode、磁盘、内存
@@ -39,7 +39,7 @@ scripts/02-apply-patches.sh              # 在 src 上建分支 ios-blink-sidelo
 scripts/03-build.sh sim                  # 编 Chrome（模拟器）
 scripts/04-run-simulator.sh              # 装到模拟器并启动，终端里看日志
 scripts/03-build.sh device               # 编真机版（未签名）
-scripts/05-package-ipa.sh                # 生成 dist/Chromium-159.0.8129.0-sideload.ipa
+scripts/05-package-ipa.sh                # 生成 dist/Chromium-159.0.8149.0-sideload.ipa
 ```
 
 IPA 用 Sideloadly、AltStore 或 SideStore 安装，手机需要打开开发者模式。细节和排错见 [docs/build-guide.md](docs/build-guide.md)。

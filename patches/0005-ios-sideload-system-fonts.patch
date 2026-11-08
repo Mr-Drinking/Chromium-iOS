@@ -25,8 +25,14 @@ Status: verified at Chromium 4558926c in the iOS 27 simulator (iPhone 13
 mini): system-ui, -apple-system and BlinkMacSystemFont render in SF Pro
 and ui-monospace in SF Mono, with spacing within 1% of Safari.
 
+Rebased onto 34d81e7b (159.0.8149.0): upstream renamed
+kCreateFontByFamily to FontFaceCreationType::kFamily and made
+OpticalSizing a scoped enum (OpticalSizing::kAuto). There, in the iOS 27
+simulator, system-ui and -apple-system still render in SF Pro and
+ui-monospace in SF Mono.
+
 diff --git a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
-index 867c60e8fc76df10b556ba334746ea0e348750ea..f914efb410d9a7dc56df5bbe39457200f3f24ef0 100644
+index 0d3231d3ba5be00a998f7f9c37c75c8dbb977dd8..cc00e1e2898b3073d38366d4feeecd6f3b8bd423 100644
 --- a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
 +++ b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
 @@ -563,6 +563,14 @@ FontDescription::FamilyDescription StyleBuilderConverterBase::ConvertFontFamily(
@@ -45,10 +51,10 @@ index 867c60e8fc76df10b556ba334746ea0e348750ea..f914efb410d9a7dc56df5bbe39457200
  
      if (desc.generic_family == FontDescription::GenericFamilyType::kNoFamily) {
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index 5f0673a7eed61cf15d645bf6b8b4f2260f1d0a39..9f3a6a29d286984297d8cf4dc976035d2768f908 100644
+index cab74e32a43477babaca1d7f99e5f81709537443..ccff811578371a35bc7cc254b59ab695dcd3cc01 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -1781,7 +1781,13 @@ component("platform") {
+@@ -1780,7 +1780,13 @@ component("platform") {
    }
  
    if (is_ios) {
@@ -64,7 +70,7 @@ index 5f0673a7eed61cf15d645bf6b8b4f2260f1d0a39..9f3a6a29d286984297d8cf4dc976035d
    if (is_linux || is_chromeos) {
      sources += [
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index 07c2f084f92f77b9ab910d85f1b0030e08c67722..971c4430ca6fdfca96da2d9bc81eacb61d3cb50f 100644
+index 36cc5f5ab5467bdeeae1405aeb0dd25c9a2cfc38..dfd17f641ccf8be7bda23d565d00f83d683afed6 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
 @@ -159,7 +159,9 @@ const FontPlatformData* FontCache::GetFontPlatformData(
@@ -75,11 +81,11 @@ index 07c2f084f92f77b9ab910d85f1b0030e08c67722..971c4430ca6fdfca96da2d9bc81eacb6
 +// [ios-blink-sideload] On iOS, as on Mac, system-ui is created and cached like
 +// any other family (see MakeIOSSystemFontTypeface()).
 +#if !BUILDFLAG(IS_APPLE)
-   if (creation_params.CreationType() == kCreateFontByFamily &&
+   if (creation_params.CreationType() == FontFaceCreationType::kFamily &&
        creation_params.Family() == font_family_names::kSystemUi) {
      return SystemFontPlatformData(font_description);
 diff --git a/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm b/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm
-index 429dd9dd628aed32999bfe7c4142e61bfffd16f0..2d513f66e85f107c49f7c9030917e761791da709 100644
+index 429dd9dd628aed32999bfe7c4142e61bfffd16f0..a5370a3167b065c17b4053d3298117869c1990c2 100644
 --- a/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm
 +++ b/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm
 @@ -4,11 +4,142 @@
@@ -214,7 +220,7 @@ index 429dd9dd628aed32999bfe7c4142e61bfffd16f0..2d513f66e85f107c49f7c9030917e761
 +    sk_sp<SkTypeface> typeface =
 +        SkMakeTypefaceFromCTFont((__bridge CTFontRef)font);
 +    if (typeface &&
-+        font_description.FontOpticalSizing() == kAutoOpticalSizing) {
++        font_description.FontOpticalSizing() == OpticalSizing::kAuto) {
 +      typeface = WithOpticalSize(std::move(typeface),
 +                                 font_description.SpecifiedSize());
 +    }
@@ -259,7 +265,7 @@ index 0000000000000000000000000000000000000000..32ef04d77d412f6a8687d5b8cab27373
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_IOS_SYSTEM_FONT_IOS_H_
 diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
-index 35776799ee8e4691cb0f6b623099437d523d01ae..0401657244fbc8cdcf60f56672b2a06f0c24c958 100644
+index 0e1e1c8e5237fb246826e3405eca5909dd8503a0..980fefcbe9683b243b8d2802b6245a2b89a10c1e 100644
 --- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
 +++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
 @@ -61,6 +61,10 @@
@@ -273,7 +279,7 @@ index 35776799ee8e4691cb0f6b623099437d523d01ae..0401657244fbc8cdcf60f56672b2a06f
  #if BUILDFLAG(IS_MAC)
  #error This file should not be used by MacOS.
  #endif
-@@ -291,6 +295,14 @@ sk_sp<SkTypeface> FontCache::CreateTypeface(
+@@ -292,6 +296,14 @@ sk_sp<SkTypeface> FontCache::CreateTypeface(
  #endif
  
    const AtomicString& family = creation_params.Family();

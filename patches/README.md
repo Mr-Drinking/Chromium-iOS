@@ -1,8 +1,8 @@
 # 补丁系列
 
-写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。2026-10-29 升到 `3313f82787695ce167d13fb795a435d3019af3f6`（159.0.8129.0）：只有 0023 冲突（上游在 `caret_display_item_client.cc` 开头加了 include），对上上下文后重新导出；0005、0016 只是行号变了，也换成了重新导出的版本；可选补丁也能打上；V8 补丁 0201 上游已经修好，删掉了（都验证过）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
+写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。2026-10-29 升到 `3313f82787695ce167d13fb795a435d3019af3f6`（159.0.8129.0）：只有 0023 冲突（上游在 `caret_display_item_client.cc` 开头加了 include），对上上下文后重新导出；0005、0016 只是行号变了，也换成了重新导出的版本；可选补丁也能打上；V8 补丁 0201 上游已经修好，删掉了（都验证过）。2026-11-07 升到 `34d81e7bfe669b8eccaaf35c6e14c7bfc0689703`（159.0.8149.0）：0012 删掉了，上游 `109b373304` 做了同样的修改（不再把工具栏报成可收起的浏览器控件）；0020 改到上游新加的 `FullscreenBrowserAgent::content_insets()` 上（上游 `dbd0269a80` 把键盘高度从 `insets()` 挪到了那里）；0005 跟着上游改了两处枚举的写法（`FontFaceCreationType::kFamily`、`OpticalSizing::kAuto`，后一处编译时才发现）；0026 删掉了 `GetPermissionResultForEmbeddedRequester()`（上游 `8d2d444db7` 随 `TOP_LEVEL_STORAGE_ACCESS` 一起从 `PermissionControllerDelegate` 里去掉了，编译时发现）；0030、0036（`UpdateScreenInfo()` 等处的 `IsTesting()` 换成了 `use_fixed_size_for_testing_`）重新对上了上下文；其余补丁内容不变，只是行号和上下文变了，都换成了在新版本上重新导出的版本（0002、0003 原来是手写的格式，内容一样）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
 
-**状态：** 0001–0038 在 159 上模拟器和真机两种配置下都编译通过，模拟器里逐项回归测试过（2026-10-29，验证过；各补丁的验证方法写在提交说明的 Status 里）。真机上用户用过含 0001–0022 的测试版（Release 3、4、6）和含 0001–0027、0001–0028 的 159 正式版（发现桌面版不起作用、转屏后画面错乱、关闭 app 时崩溃，分别由 0024 的修正、0030、0029 处理），反馈见 [docs/status.md](../docs/status.md)；用户 2026-10-29 在真机上确认了 0024 的修正（桌面版排版）、0027 的振动和 0033（上传文件，包括拍照）；0023、0025、0026、0028–0032、0034–0038 还没在真机上确认过（0035、0036 的第一版用户 2026-10-30 在真机上试过，转屏仍然慢、刘海挡住网页，0036 改过一次，又加了 0037、0038）。
+**状态：** 2026-11-08 升到 159.0.8149.0 后，现有的 37 个补丁（0001–0011、0013–0038）在模拟器和真机两种配置下都编译通过，模拟器里回归了键盘、转屏、刘海、滑到底、工具栏、网站权限和常用功能，结果和升级前一样（验证过；各补丁的验证方法写在提交说明的 Status 里，改过的 0005、0020、0026、0030、0036 补上了在新版本上重测的结果）。159.0.8149.0 的真机包还没发布。以下是 159.0.8129.0 上的情况：真机上用户用过含 0001–0022 的测试版（Release 3、4、6）和含 0001–0027、0001–0028 的 159 正式版（发现桌面版不起作用、转屏后画面错乱、关闭 app 时崩溃，分别由 0024 的修正、0030、0029 处理），反馈见 [docs/status.md](../docs/status.md)；用户 2026-10-29 在真机上确认了 0024 的修正（桌面版排版）、0027 的振动和 0033（上传文件，包括拍照）；0023、0025、0026、0028–0032、0034–0038 还没在真机上确认过（0035、0036 的第一版用户 2026-10-30 在真机上试过，转屏仍然慢、刘海挡住网页，0036 改过一次，又加了 0037、0038）。
 
 | 补丁 | 改动文件 | 作用 |
 |---|---|---|
@@ -17,7 +17,6 @@
 | `0009-ios-sideload-system-proxy.patch` | `services/network/network_context.cc` | 网页请求走系统代理设置（Wi-Fi 的 HTTP 代理、PAC；模拟器里是 Mac 的代理）。原来 ios/web 不给网络服务传代理设置，网页一律直连 |
 | `0010-ios-sideload-user-agent-ios-version.patch` | `components/embedder_support/user_agent_utils{,_unittest}.cc` | UA 里的 iOS 版本从上游冻结的 14_0 改成 18_7（和 iOS 27 的 Safari 一样）；14_0 会让 google.com 等网站给出简陋的旧版页面 |
 | `0011-ios-sideload-overscroll-touch-cancel.patch` | `ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm` | 下拉刷新的手势不再取消网页收到的触摸。原来它一识别，Blink 就收到 touchcancel，页面滚几下就停（"有点卡"） |
-| `0012-ios-sideload-no-collapsible-browser-controls.patch` | `ios/web/content/web_state/content_web_state.mm` | 不再告诉 Blink 工具栏能收起：工具栏在 Blink 下从不收起，Blink 却按能收起多留了 108 pt 的滚动距离，网页滑不到底 |
 | `0013-ios-sideload-downloads.patch` | `ios/web/content/download/content_download_{task,manager_delegate}.{h,mm}`（新）、`ios/web/content/{content_browser_context.{h,mm},BUILD.gn,DEPS}`、`ios/web/download/download_controller_impl.{h,mm}`、`ios/chrome/browser/download/coordinator/{download_manager_mediator.mm,BUILD.gn}` | 下载：把 content 的下载包装成 `web::DownloadTask` 交给 Chrome 的下载栏（原来没有下载委托，content 把每个下载都取消了）；PDF 下载完只给"打开方式…" |
 | `0014-ios-sideload-responder-actions.patch` | `content/browser/renderer_host/render_widget_host_view_ios_uiview.mm` | 网页视图只认领自己实现了的响应者动作（原来全部认领，接实体键盘按快捷键或 Cmd+C 就闪退），并补上 `copy:`/`cut:`/`paste:` |
 | `0015-ios-sideload-text-edit-menu.patch` | `ios/web/content/ui/content_context_menu_controller.mm`、`ios/web/content/BUILD.gn` | 长按文字或输入框时，通过网页视图的 BrowserEngineKit 文本交互弹出系统编辑菜单（Safari 用的那个；菜单项由 0019 决定） |
@@ -53,7 +52,7 @@
 
 - 代码里的改动统一加 `[ios-blink-sideload]` 注释，`git grep '\[ios-blink-sideload\]'` 能找全。
 - 改动尽量小，只放语义改动，不夹带格式化。
-- V8 等子仓库的补丁放在对应子目录，`series` 里写成 `src/v8:v8/02xx-xxx.patch`，脚本会在 `src/v8` 里按 DEPS 的版本建分支再打。导出时的基准也是 DEPS 里的版本（V8 现在是 `0388bc74`）。现在没有子仓库补丁：158 上用过的 `v8/0201`（让 DrumBrake 编得过）在 159 上不需要了。
+- V8 等子仓库的补丁放在对应子目录，`series` 里写成 `src/v8:v8/02xx-xxx.patch`，脚本会在 `src/v8` 里按 DEPS 的版本建分支再打。导出时的基准也是 DEPS 里的版本（V8 现在是 `a1175dcf`）。现在没有子仓库补丁：158 上用过的 `v8/0201`（让 DrumBrake 编得过）在 159 上不需要了。
 
 ## 来源与许可
 
@@ -62,4 +61,4 @@
 
 ## 更新补丁
 
-见 [docs/build-guide.md 第 7 节](../docs/build-guide.md#7-修改补丁)：在 `src` 的 `ios-blink-sideload` 分支上修改并提交，再用 `git format-patch 3313f827..HEAD` 导出覆盖这里的文件。
+见 [docs/build-guide.md 第 7 节](../docs/build-guide.md#7-修改补丁)：在 `src` 的 `ios-blink-sideload` 分支上修改并提交，再用 `git format-patch 34d81e7b..HEAD` 导出覆盖这里的文件。

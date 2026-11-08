@@ -1,6 +1,6 @@
 # 结构与补丁说明
 
-以下路径都相对于 Chromium 的 `src/`。分析是在 `d586be9f`（158.0.8125.0）上做的；固定版本后来升到 `4558926c`（158.0.8127.0）。两者之间，补丁涉及的文件只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 有变化：上游新加了一个和补丁无关的 `ClearFocusedElement()`（验证过）。2026-10-29 再升到 `3313f827`（159.0.8129.0）：补丁内容都没变，只有 0023 要重新对上几行上下文：上游 2026-10-27 让竖线光标的宽度不受元素变换影响（`623986716f`），在 `caret_display_item_client.cc` 开头加了几个 include；V8 补丁 0201 上游已经修好，删掉了（见第 3 节；验证过）。
+以下路径都相对于 Chromium 的 `src/`。分析是在 `d586be9f`（158.0.8125.0）上做的；固定版本后来升到 `4558926c`（158.0.8127.0）。两者之间，补丁涉及的文件只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 有变化：上游新加了一个和补丁无关的 `ClearFocusedElement()`（验证过）。2026-10-29 再升到 `3313f827`（159.0.8129.0）：补丁内容都没变，只有 0023 要重新对上几行上下文：上游 2026-10-27 让竖线光标的宽度不受元素变换影响（`623986716f`），在 `caret_display_item_client.cc` 开头加了几个 include；V8 补丁 0201 上游已经修好，删掉了（见第 3 节；验证过）。2026-11-07 再升到 `34d81e7b`（159.0.8149.0）：上游 `109b373304`「[ios blink] Fix viewport sizing in both fullscreen layouts」不再把工具栏报成可收起的浏览器控件，0012 删掉了；上游 `dbd0269a80` 把键盘高度从 `FullscreenBrowserAgent::insets()` 挪到新的 `content_insets()`，0020 跟着改到那里；0005（`kCreateFontByFamily` 改名为 `FontFaceCreationType::kFamily`）、0030、0036（`IsTesting()` 换成了 `use_fixed_size_for_testing_`，`UpdateScreenInfo()` 改了写法）重新对上了上下文；编译时又碰到两处接口改动：`OpticalSizing` 改成了带作用域的枚举（0005 改用 `OpticalSizing::kAuto`），`PermissionControllerDelegate` 去掉了 `GetPermissionResultForEmbeddedRequester()`（0026 删掉了对应的实现）。模拟器里回归过键盘、转屏、刘海、滑到底、工具栏位置、网站权限，结果和升级前一样（都验证过）。
 
 ## 1. Chrome iOS 怎么换成 Blink 内核
 
@@ -111,7 +111,9 @@ Blink 版的网页请求走 content 的网络服务，而 ios/web 从不给它�
 
 Chrome 的下拉动作（刷新、关闭标签页、新标签页）往网页的滚动视图上加了一个 `UIPanGestureRecognizer`。WebKit 下没问题，滚动视图用自己的手势滚动；Blink 下网页是靠收到的原始触摸自己滚动的，那个滚动视图只是镜像 Blink 的偏移。手势一识别（拖动几个点之后），UIKit 就按默认的 `cancelsTouchesInView` 取消这些触摸，Blink 收到 touchcancel，页面就不滚了。`RenderWidgetUIView` 换渲染视图时会把这个滚动视图上的手势全部移除，所以只是"有时候"滚不动，对应用户说的"有点卡"。补丁让 Blink 构建里这个手势不取消、不延迟触摸。下拉动作在 Blink 下本来就触发不了（镜像的偏移不会小于 0），没有损失。模拟器里验证过（记录触摸事件和 `scrollY` 的测试页）：之前拖 400 pt 只收到 touchstart 和 touchcancel，页面不动；之后页面跟手（手指移动 416 px，滚动 421 px），快速一划带惯性滚 955 px；在顶部往下拉也没有异常。
 
-### 0012 不再告诉 Blink 工具栏能收起（`ios/web/content/web_state/content_web_state.mm`）
+### 0012 不再告诉 Blink 工具栏能收起（`ios/web/content/web_state/content_web_state.mm`，159.0.8149.0 起删掉了）
+
+2026-11-07 升到 159.0.8149.0 时删掉了：上游 `109b373304`（2026-11-04）得出同样的结论（"avoid reserving toolbar space twice in Blink"），直接删掉了 `ContentWebState` 里报浏览器控件的这几个函数（`GetTopControlsHeight()` 等），`WebContentsDelegate` 的默认值就是 0，效果和这个补丁一样。下面是原来的说明。
 
 Blink 版照 Android 的做法，把 Chrome 顶部、底部工具栏能收起的高度当成"浏览器控件"报给 Blink（`GetTopControlsHeight()`、`GetBottomControlsHeight()`，取自 `CRCWebViewportContainerView` 里写死的插入值：顶部 109 - 79 = 30 pt，底部 78 pt）。Blink 于是让网页多滚这么一段，等着工具栏收起后露出来。但工具栏从来不收起：Chrome 的 `FullscreenMediator` 只处理滚动视图"正在被拖动或减速"时的滚动，而 Blink 下那个滚动视图只是程序设置偏移的镜像，`isDragging` 永远是 NO。结果每个网页最后 108 pt 都被底部工具栏挡着，滑不到底（用户在真机上发现）。补丁报 0，Blink 的最大滚动距离就和可见区域一致。工具栏还是一直显示；要让它们像正版那样滚动时收起，得把 Blink 的滚动接进 Chrome 的 fullscreen 逻辑，没做。模拟器里验证过：之前滚到头还差 108 px，最后一个元素在工具栏下面；之后能滚到底、完整露出，顶部也没被挡。
 
@@ -182,7 +184,7 @@ content 的单进程模式只有一个进程内渲染器，也只支持一个浏
 
 用户在真机上发现，屏幕键盘一出来页面布局就变短，和 iOS 26 起 Liquid Glass 的设计冲突（键盘是半透明的，后面应该看得到网页），而且网页卡来卡去。原因见 0017 一节：Chrome 把键盘高度加进网页视图的底部内边距，Blink 版据此把网页视图缩短，于是布局视口（`innerHeight`）变矮，每次键盘出现、收起、改变高度（比如候选栏变化）都要整页重新排版，键盘后面只剩空白。WKWebView 里同样的内边距只是标出"被挡住的部分"，视图不变。
 
-补丁在 Blink 版里不再把键盘加进内边距（`FullscreenBrowserAgent` 里的 `kKeyboardInsetsWebView`），由 content 自己处理键盘：可见区域扣掉键盘挡住的部分，再把焦点输入框滚进视野。这和 Safari、安卓 Chrome（`interactive-widget=resizes-visual`，默认值）的做法一样：布局视口不变，只有可视视口变小。要做对，还改了几处：
+补丁在 Blink 版里不再把键盘加进内边距（`FullscreenBrowserAgent` 里的 `kKeyboardInsetsWebView`），由 content 自己处理键盘。159.0.8149.0 起上游（`dbd0269a80`，为 WKWebView 修键盘把 `position: fixed` 的元素顶到输入框上的问题）不再把键盘加进 `insets()`，改成另算 `content_insets()`，由 `FullscreenMediator` 设到网页滚动视图的 `contentInset.bottom`；Blink 版的网页视图正是按这个滚动视图的 `contentInset` 定尺寸（`UpdateFrameBounds()`），照搬的话键盘还会把网页压短，所以补丁改成在 `content_insets()` 里排除键盘。content 这边的做法：可见区域扣掉键盘挡住的部分，再把焦点输入框滚进视野。这和 Safari、安卓 Chrome（`interactive-widget=resizes-visual`，默认值）的做法一样：布局视口不变，只有可视视口变小。要做对，还改了几处：
 
 - 键盘上方的"上一项 / 下一项 / 完成"按钮栏算作键盘的一部分。上游特意把它减掉了，以前视图被缩短时看不出问题，现在会把输入框滚到按钮后面。
 - 等新的可视区域生效后再请求滚动。上游在同步新尺寸后立刻请求 `ScrollFocusedEditableNodeIntoView`，两条消息走不同的通道，Blink 先收到滚动请求，按旧的可视区域判断输入框"看得见"，就不滚了（在 Blink 和 cc 里加日志确认过：判断时可视区域还是 1893 px 高）。现在照 `RenderWidgetHostViewAura::SetInsets()` 的做法：键盘出现或变高时分配一个新的 surface id（`ForceNewSurfaceId()`），等带这个 id 的帧激活（`OnRenderFrameMetadataChangedAfterActivation`）后再请求滚动。

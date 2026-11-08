@@ -57,10 +57,10 @@ textarea the menu has Cut, Copy, Paste and Select All. A long press on
 a link still shows Chrome's link menu.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index d7bda6332c2c17960af0f0a4d4a1b6eba13bbaca..dbbdeddc0a0da5d076913aff5a9313fb6485df4f 100644
+index 75025997f043722213b9bf9288c1b024631e8bbe..7c6914167b9d3cb452d11efedc77801e5675666e 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
-@@ -888,6 +888,7 @@ bool IsTesting() {
+@@ -897,6 +897,7 @@ bool IsTesting() {
    } else {
      [[ui_view_->view_ textInteraction] textSelectionDisplayInteraction]
          .activated = NO;
@@ -68,7 +68,7 @@ index d7bda6332c2c17960af0f0a4d4a1b6eba13bbaca..dbbdeddc0a0da5d076913aff5a9313fb
    }
  #endif
  }
-@@ -898,6 +899,7 @@ bool IsTesting() {
+@@ -907,6 +908,7 @@ bool IsTesting() {
  #if !BUILDFLAG(IS_IOS_TVOS)
    [[ui_view_->view_ textInteraction]
            .textSelectionDisplayInteraction setNeedsSelectionUpdate];
@@ -76,7 +76,7 @@ index d7bda6332c2c17960af0f0a4d4a1b6eba13bbaca..dbbdeddc0a0da5d076913aff5a9313fb
  #endif
  }
  
-@@ -921,6 +923,9 @@ bool IsTesting() {
+@@ -930,6 +932,9 @@ bool IsTesting() {
          host()->delegate()->SetTopControlsGestureScrollInProgress(true);
        }
        [[scrollView delegate] scrollViewWillBeginDragging:scrollView];
@@ -86,7 +86,7 @@ index d7bda6332c2c17960af0f0a4d4a1b6eba13bbaca..dbbdeddc0a0da5d076913aff5a9313fb
        break;
      case blink::WebInputEvent::Type::kGestureScrollUpdate:
        // TODO(crbug.com/40274032): Since ScrollResultData has been removed from
-@@ -945,6 +950,9 @@ bool IsTesting() {
+@@ -952,6 +957,9 @@ bool IsTesting() {
        [[scrollView delegate] scrollViewDidEndDragging:scrollView
                                         willDecelerate:NO];
        host()->SynchronizeVisualProperties();

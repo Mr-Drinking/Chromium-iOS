@@ -16,7 +16,7 @@
 ## 已定决策（除非用户提出，不要推翻或重新讨论）
 
 1. **编 `chrome` 目标（Chrome iOS 界面），`use_blink = true`。** Android 界面在 iOS 上跑不了；不在 content_shell 上自己画界面。
-2. **固定在 Chromium `3313f827`（159.0.8129.0）**，这是官方 iOS Blink CI（`ios-blink-rel-fyi`）2026-10-28 编译通过的 main 提交（测试只挂了 5 个和 Blink 无关的 Autofill 单测，见 `scripts/config.sh`）。2026-10-29 应用户要求从 `4558926c`/158.0.8127.0 升上来，更早是 `d586be9f`/158.0.8125.0。升级前先问用户（流程见 `docs/build-guide.md` 第 8 节）。
+2. **固定在 Chromium `34d81e7b`（159.0.8149.0）**，这是官方 iOS Blink CI（`ios-blink-rel-fyi`）2026-11-07 编译通过的 main 提交（测试挂了 17 个用例，都和我们编的 chrome 无关：Autofill、默认关闭的 Rust JPEG 解码器、一个新加的 GPU 测试，见 `scripts/config.sh`）。2026-11-07 应用户要求从 `3313f827`/159.0.8129.0 升上来，再早是 `4558926c`/158.0.8127.0、`d586be9f`/158.0.8125.0。升级前先问用户（流程见 `docs/build-guide.md` 第 8 节）。
 3. **单进程 + V8 免 JIT。** 侧载拿不到 BrowserEngineKit 权限，这是唯一可行的形态（照搬官方 tvOS 的做法）。JIT 放到最后。
 4. **侧载安装**（Sideloadly / AltStore / SideStore）。iOS 27 没有 TrollStore。
 5. **Blinker Fluid 只作参考。** 不把它的 GPL-3.0 代码放进本仓库；需要时用 `tools/blinker_rebase.py` 现拉现合，只提取语义改动，重写成 `patches/` 里的最小补丁。
@@ -32,7 +32,7 @@
 
 - 按 `docs/status.md` 的阶段推进：环境 → 模拟器里跑 Chrome → 真机 → 补强。先在模拟器里把问题解决掉，再上真机。
 - **编译报错先查 API 漂移。** 补丁最早是对着 158 的源码手写的，升级 Chromium 后可能碰上接口改动。已经踩过两次：物理内存接口改成了 `base::SysInfo::AmountOfTotalPhysicalMemory().InMiB()`；`kJavaScriptFlags` 挪到了 `blink::switches`，所以补丁里直接写 `"js-flags"`。在 Chromium 的 `src` 里 `git grep` 确认，不要凭记忆。
-- **改补丁的流程**（`docs/build-guide.md` 第 7 节）：在 `src` 的 `ios-blink-sideload` 分支上改并提交 → `git format-patch --zero-commit --no-numbered --no-stat --full-index 3313f827..HEAD` → 覆盖 `patches/` 里对应文件 → 重跑 `scripts/02-apply-patches.sh` 验证 → 更新 `docs/status.md` → 提交本仓库。现在没有 V8 补丁（158 上用过的 0201 在 159 上不需要了，上游已修）；以后要改 V8，补丁放 `patches/v8/`，在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `0388bc74`）。
+- **改补丁的流程**（`docs/build-guide.md` 第 7 节）：在 `src` 的 `ios-blink-sideload` 分支上改并提交 → `git format-patch --zero-commit --no-numbered --no-stat --full-index 34d81e7b..HEAD` → 覆盖 `patches/` 里对应文件 → 重跑 `scripts/02-apply-patches.sh` 验证 → 更新 `docs/status.md` → 提交本仓库。现在没有 V8 补丁（158 上用过的 0201 在 159 上不需要了，上游已修）；以后要改 V8，补丁放 `patches/v8/`，在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `a1175dcf`）。
 - 代码改动统一加 `[ios-blink-sideload]` 注释；补丁只放语义改动，不夹带格式化。
 - `gclient sync`、首次编译要几十分钟到几小时，放后台跑，并告诉用户大概要等多久。
 - 写进文档的结论要标明是"验证过"还是"推测"。

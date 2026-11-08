@@ -1,6 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ios-blink-sideload <noreply@example.invalid>
-Subject: [PATCH] iOS sideload: wait for a Metal device before in-process GL init
+Date: Sat, 7 Nov 2026 23:57:10 +0800
+Subject: [PATCH] iOS sideload: wait for a Metal device before in-process GL
+ init
 
 ANGLE asks for a Metal device once, during GL initialization, and caches a
 nil answer for the rest of the process, after which no web content can be
@@ -11,12 +13,12 @@ this one is self-contained.)
 
 Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
 applies with git am --3way. Verify on a Mac before trusting it.
----
+
 diff --git a/content/gpu/BUILD.gn b/content/gpu/BUILD.gn
-index 19e7f3c36f27547df6b98d8c002e44a4138d44e6..b1ae50e1f826313078f0b2e152ad3e3a0635e76e 100644
+index 15aed10aab990bb7a7590ef6d56d15c5439d3dfe..56c35464c5fbd24d60499792488e16548af7cc9b 100644
 --- a/content/gpu/BUILD.gn
 +++ b/content/gpu/BUILD.gn
-@@ -116,6 +116,15 @@ target(link_target_type, "gpu_sources") {
+@@ -117,6 +117,15 @@ target(link_target_type, "gpu_sources") {
      deps += [ "//components/metal_util" ]
    }
  
@@ -32,6 +34,33 @@ index 19e7f3c36f27547df6b98d8c002e44a4138d44e6..b1ae50e1f826313078f0b2e152ad3e3a
    if (use_ozone) {
      deps += [ "//ui/ozone" ]
    }
+diff --git a/content/gpu/in_process_gpu_thread.cc b/content/gpu/in_process_gpu_thread.cc
+index 032d70ce65fbc43b86308bdd90cbc3aa3517b624..2e3dc5db9f0518f605d8afa9c34d62183ac6d241 100644
+--- a/content/gpu/in_process_gpu_thread.cc
++++ b/content/gpu/in_process_gpu_thread.cc
+@@ -27,6 +27,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++#include "content/gpu/ios_sideload_metal_wait.h"
+ #include "gpu/ipc/common/ios/be_layer_hierarchy_transport.h"
+ #endif
+ 
+@@ -98,6 +99,14 @@ void InProcessGpuThread::Init() {
+     gpu_process_ = std::make_unique<ChildProcess>(io_thread_type);
+   }
+ 
++#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
++  // [ios-blink-sideload] ANGLE asks for a Metal device once, during GL init,
++  // and keeps a nil answer for the life of the process (no GL, no web
++  // content). This thread can start before the first scene connects, so give
++  // Metal a bounded chance to become available first.
++  WaitForIOSMetalDevice(/*timeout_ms=*/2000);
++#endif
++
+   auto gpu_init = gpu::GpuInit::Create();
+   gpu_init->InitializeInProcess(base::CommandLine::ForCurrentProcess(),
+                                 gpu_preferences_);
 diff --git a/content/gpu/ios_sideload_metal_wait.h b/content/gpu/ios_sideload_metal_wait.h
 new file mode 100644
 index 0000000000000000000000000000000000000000..869e5bd3abd373915038ecdfdbe2b150b2e3d4f4
@@ -94,32 +123,6 @@ index 0000000000000000000000000000000000000000..f01e3d0f5cc1f4e8772f242214aad1c6
 +}
 +
 +}  // namespace content
-diff --git a/content/gpu/in_process_gpu_thread.cc b/content/gpu/in_process_gpu_thread.cc
-index 032d70ce65fbc43b86308bdd90cbc3aa3517b624..2e3dc5db9f0518f605d8afa9c34d62183ac6d241 100644
---- a/content/gpu/in_process_gpu_thread.cc
-+++ b/content/gpu/in_process_gpu_thread.cc
-@@ -27,6 +27,7 @@
- #endif
- 
- #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
-+#include "content/gpu/ios_sideload_metal_wait.h"
- #include "gpu/ipc/common/ios/be_layer_hierarchy_transport.h"
- #endif
- 
-@@ -98,6 +99,14 @@ void InProcessGpuThread::Init() {
-     gpu_process_ = std::make_unique<ChildProcess>(io_thread_type);
-   }
- 
-+#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
-+  // [ios-blink-sideload] ANGLE asks for a Metal device once, during GL init,
-+  // and keeps a nil answer for the life of the process (no GL, no web
-+  // content). This thread can start before the first scene connects, so give
-+  // Metal a bounded chance to become available first.
-+  WaitForIOSMetalDevice(/*timeout_ms=*/2000);
-+#endif
-+
-   auto gpu_init = gpu::GpuInit::Create();
-   gpu_init->InitializeInProcess(base::CommandLine::ForCurrentProcess(),
-                                 gpu_preferences_);
 -- 
-ios-blink-sideload
+2.54.0 (Apple Git-157)
+

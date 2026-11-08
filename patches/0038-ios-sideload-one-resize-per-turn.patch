@@ -30,7 +30,7 @@ handlers once; Wikipedia draws at its new size 0.4 to 0.6 s after the
 turn starts. Not checked on a device.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
-index dabfed17eec54465afc7a5139d5d5bf824e013f5..6c43ce766240b37810868a42c42c939c3683985c 100644
+index 14e301a8d4177b9694ec63e167b63be9f3fa70b3..61d511daca0056f9bd24aec45692d15c1c9922b5 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.h
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.h
 @@ -13,6 +13,7 @@
@@ -49,7 +49,7 @@ index dabfed17eec54465afc7a5139d5d5bf824e013f5..6c43ce766240b37810868a42c42c939c
  
    // display::DisplayObserver:
    void OnDisplayMetricsChanged(const display::Display& display,
-@@ -317,6 +319,19 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+@@ -325,6 +327,19 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
    bool awaiting_resize_frame_ = false;
    viz::LocalSurfaceId resize_surface_id_;
  
@@ -70,7 +70,7 @@ index dabfed17eec54465afc7a5139d5d5bf824e013f5..6c43ce766240b37810868a42c42c939c
    // we do not change its size during scroll.
    gfx::Rect view_bounds_;
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index 3cab191f1dedc0755604d2453f334300d5d05002..0777eff37e577c02ba780ca84535d343e713f135 100644
+index 77f9497a4c980a0e35631201f4461e2aa01e7620..fb5c1117216ae78d7f14a120d22e7ae221f7b358 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
 @@ -11,6 +11,7 @@
@@ -94,7 +94,7 @@ index 3cab191f1dedc0755604d2453f334300d5d05002..0777eff37e577c02ba780ca84535d343
  // [ios-blink-sideload] How far the window's unsafe area (in landscape, the
  // notch on one side and the rounded corners on both) reaches into `view` from
  // its left and right edges.
-@@ -522,6 +529,10 @@ bool IsTesting() {
+@@ -530,6 +537,10 @@ bool IsTesting() {
      if (awaiting_resize_frame_) {
        resize_surface_id_ = GetLocalSurfaceId();
      }
@@ -105,7 +105,7 @@ index 3cab191f1dedc0755604d2453f334300d5d05002..0777eff37e577c02ba780ca84535d343
    }
    ComputeDisplayFeature();
  
-@@ -536,12 +547,45 @@ bool IsTesting() {
+@@ -545,12 +556,45 @@ bool IsTesting() {
  void RenderWidgetHostViewIOS::OnDisplayMetricsChanged(
      const display::Display& display,
      uint32_t changed_metrics) {
@@ -152,7 +152,7 @@ index 3cab191f1dedc0755604d2453f334300d5d05002..0777eff37e577c02ba780ca84535d343
  void RenderWidgetHostViewIOS::OnSynchronizedDisplayPropertiesChanged(
      bool rotation) {
    host()->SynchronizeVisualProperties();
-@@ -559,6 +603,7 @@ bool IsTesting() {
+@@ -568,6 +612,7 @@ bool IsTesting() {
    // new size (UpdateScreenInfo() allocates it as the view lays out).
    awaiting_resize_frame_ = true;
    resize_surface_id_ = viz::LocalSurfaceId();
@@ -160,7 +160,7 @@ index 3cab191f1dedc0755604d2453f334300d5d05002..0777eff37e577c02ba780ca84535d343
  }
  
  void RenderWidgetHostViewIOS::OnOldViewDidNavigatePreCommit() {
-@@ -1097,6 +1142,10 @@ bool IsTesting() {
+@@ -1109,6 +1154,10 @@ bool IsTesting() {
  }
  
  void RenderWidgetHostViewIOS::ContentInsetChanged() {

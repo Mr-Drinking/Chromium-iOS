@@ -34,7 +34,7 @@ on a page that also has "Apple"; a word that is not on the page shows
 navigator clears the highlights, and Find opens again afterwards.
 
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
-index 127a07e2adfdf93edbb2d2638a95f14fafef2ff6..0af63b2bad3c7fc13cd7d1e74f653a88d5b41187 100644
+index df9d371656412443bf004adc70a38b0d391cfa4c..df22877b7152501be76cfaed4b4e7e6520140884 100644
 --- a/ios/web/content/BUILD.gn
 +++ b/ios/web/content/BUILD.gn
 @@ -41,6 +41,8 @@ source_set("content") {
@@ -61,18 +61,18 @@ index 62deeb521d826312867d742fc792c81ae65b0c2d..d4439ad3bc2f525d0d2bfc5d27f0d871
      "+content/public/test/content_test_suite_base.h",
      "+content/public/test/unittest_test_suite.h",
 diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
-index f9a584f90f974a4bdc5f1e265372830994e5485e..77cf532344460bb65c20594eaad510dc5ba7cf8e 100644
+index 1ce1755ee2559174ae9892dfdf15dcb815a173f7..18081b9cafb9292a097b4a41357d5a864128c2d1 100644
 --- a/ios/web/content/web_state/content_web_state.h
 +++ b/ios/web/content/web_state/content_web_state.h
-@@ -24,6 +24,7 @@
- #import "ios/web/public/web_state.h"
+@@ -25,6 +25,7 @@
  #import "ios/web/public/web_state_id.h"
+ #import "ui/base/mojom/window_open_disposition.mojom-forward.h"
  
 +@class CRCFindInPageController;
  @class CRCWebViewportContainerView;
  @class CRWWebViewProxy;
  
-@@ -203,6 +204,11 @@ class ContentWebState : public WebState,
+@@ -205,6 +206,11 @@ class ContentWebState : public WebState,
        content::RenderFrameHost::LifecycleState new_state) override;
    void PrimaryMainFrameRenderProcessGone(
        base::TerminationStatus status) override;
@@ -84,7 +84,7 @@ index f9a584f90f974a4bdc5f1e265372830994e5485e..77cf532344460bb65c20594eaad510dc
  
    // WebContentsDelegate
    content::WebContents* AddNewContents(
-@@ -252,6 +258,8 @@ class ContentWebState : public WebState,
+@@ -245,6 +251,8 @@ class ContentWebState : public WebState,
  
    raw_ptr<WebStateDelegate> delegate_ = nullptr;
    CRCWebViewportContainerView* web_view_;
@@ -94,7 +94,7 @@ index f9a584f90f974a4bdc5f1e265372830994e5485e..77cf532344460bb65c20594eaad510dc
    std::unique_ptr<content::WebContents> web_contents_;
    std::unique_ptr<content::WebContents> child_web_contents_;
 diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
-index cd069d418751a900a74a4a3cbfadad6da37436a7..37338cbeb969522febe898f96c62ceecf57306b8 100644
+index 95396eae7ad47b35704e35301b75eee25226c601..38b7cb940588c7312d90cc115f4cbe8efa041d5f 100644
 --- a/ios/web/content/web_state/content_web_state.mm
 +++ b/ios/web/content/web_state/content_web_state.mm
 @@ -20,10 +20,12 @@
@@ -110,7 +110,7 @@ index cd069d418751a900a74a4a3cbfadad6da37436a7..37338cbeb969522febe898f96c62ceec
  #import "ios/web/public/navigation/navigation_item.h"
  #import "ios/web/public/navigation/navigation_util.h"
  #import "ios/web/public/navigation/web_state_policy_decider.h"
-@@ -552,18 +554,47 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -551,18 +553,47 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
      id<CRWWebViewDownloadDelegate> delegate,
      void (^handler)(id<CRWWebViewDownload>)) {}
  

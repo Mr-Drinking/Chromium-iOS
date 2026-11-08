@@ -52,10 +52,10 @@ index 160f09ddcc32c5f4e50eda2c4976d6feb598a589..494cdf984740b8cf0fcbecbdc0320755
  
  - (UIAction*)actionToOpenInNewWindowWithURL:(const GURL&)URL
 diff --git a/ios/chrome/browser/policy/model/BUILD.gn b/ios/chrome/browser/policy/model/BUILD.gn
-index 56713a919bdeea15dd7d0cecb12f09cdd648f538..dd5235f61cf0dd6d591379110405a3a8d7a2cf64 100644
+index 87c61140f6361d9d9cd21092f3a7711ae17ba3da..edf43e488c040f9d33deedebb02f24ce5a1a514f 100644
 --- a/ios/chrome/browser/policy/model/BUILD.gn
 +++ b/ios/chrome/browser/policy/model/BUILD.gn
-@@ -252,6 +252,7 @@ source_set("policy_util") {
+@@ -255,6 +255,7 @@ source_set("policy_util") {
    ]
    deps = [
      "//base",

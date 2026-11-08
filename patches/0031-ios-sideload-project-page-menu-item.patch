@@ -20,10 +20,10 @@ Chromium" was, and tapping it opens
 https://github.com/Mr-Drinking/Chromium-iOS in a new tab.
 
 diff --git a/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm b/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
-index f1979cdfed13e6a21ce927daa0c9e2bc40c9fddf..f9f7375f6656a60a3319930a91943f3bd883e429 100644
+index a00bffa34ff45f97ccb3c898ee565f896e07f2e0..898153f10729c954264e4b39e52cc8982798d990 100644
 --- a/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
 +++ b/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
-@@ -163,6 +163,25 @@
+@@ -164,6 +164,25 @@
  
  namespace {
  
@@ -49,7 +49,7 @@ index f1979cdfed13e6a21ce927daa0c9e2bc40c9fddf..f9f7375f6656a60a3319930a91943f3b
  #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
  NSString* const kGeminiBrandedLogoSymbol = @"gemini_logo";
  #else
-@@ -1021,17 +1040,18 @@ - (void)initializeModel {
+@@ -1023,17 +1042,18 @@ - (void)initializeModel {
                                           [weakSelf openHelp];
                                         }];
  
@@ -78,7 +78,7 @@ index f1979cdfed13e6a21ce927daa0c9e2bc40c9fddf..f9f7375f6656a60a3319930a91943f3b
  
    self.defaultBrowserAction =
        [self createOverflowMenuActionWithNameID:
-@@ -3164,6 +3184,16 @@ - (void)showShareSheetForChromeApp {
+@@ -3166,6 +3186,16 @@ - (void)showShareSheetForChromeApp {
    [self.activityServiceHandler showShareSheetForChromeApp];
  }
  

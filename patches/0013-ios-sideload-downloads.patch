@@ -68,7 +68,7 @@ index 24ea748a8af7788fe9f22ef1b52ce255687fe1c0..8a504ce1edf7785aeeda958f5ed1a4a5
  
    [consumer_ setState:state];
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
-index e394921c6753d06a60814acdad77d653c527d9ae..a2eff5aae23202f334ea0ec4338288b0cb4c80e8 100644
+index bae30f58e0fbcedf1697012605308c66ceae82e0..ca54cfe5aa639484f85e9108dd7a434720690879 100644
 --- a/ios/web/content/BUILD.gn
 +++ b/ios/web/content/BUILD.gn
 @@ -17,6 +17,10 @@ source_set("content") {
@@ -82,7 +82,7 @@ index e394921c6753d06a60814acdad77d653c527d9ae..a2eff5aae23202f334ea0ec4338288b0
      "js_messaging/content_java_script_feature_manager.h",
      "js_messaging/content_java_script_feature_manager.mm",
      "js_messaging/content_java_script_feature_util.h",
-@@ -46,6 +50,7 @@ source_set("content") {
+@@ -47,6 +51,7 @@ source_set("content") {
      ":send_webkit_message_js",
      "//base",
      "//build:blink_buildflags",
@@ -90,7 +90,7 @@ index e394921c6753d06a60814acdad77d653c527d9ae..a2eff5aae23202f334ea0ec4338288b0
      "//components/embedder_support/ios:web_contents_delegate",
      "//components/javascript_dialogs",
      "//components/js_injection/browser",
-@@ -54,6 +59,7 @@ source_set("content") {
+@@ -55,6 +60,7 @@ source_set("content") {
      "//ios/web/annotations",
      "//ios/web/common",
      "//ios/web/common:user_agent",
@@ -98,7 +98,7 @@ index e394921c6753d06a60814acdad77d653c527d9ae..a2eff5aae23202f334ea0ec4338288b0
      "//ios/web/find_in_page",
      "//ios/web/js_features/context_menu",
      "//ios/web/js_features/error_page",
-@@ -69,6 +75,7 @@ source_set("content") {
+@@ -70,6 +76,7 @@ source_set("content") {
      "//ios/web/public/session/proto:proto_util",
      "//ios/web/util",
      "//ios/web/webui",

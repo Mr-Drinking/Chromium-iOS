@@ -44,10 +44,10 @@ zoomed-out page is not checked (the simulator tools here have no
 two-finger input).
 
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
-index 0af63b2bad3c7fc13cd7d1e74f653a88d5b41187..56750acb7f278013c2e560186ae344cccaddd8c2 100644
+index df22877b7152501be76cfaed4b4e7e6520140884..7b613b56b631e81212ca426e388b51c89a1143b7 100644
 --- a/ios/web/content/BUILD.gn
 +++ b/ios/web/content/BUILD.gn
-@@ -53,6 +53,7 @@ source_set("content") {
+@@ -54,6 +54,7 @@ source_set("content") {
      "//base",
      "//build:blink_buildflags",
      "//components/download/public/common:public",

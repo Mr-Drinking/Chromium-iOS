@@ -31,10 +31,10 @@ Pinyin composition and committing a candidate work as before, and long-
 pressing page text still selects a word with handles and its menu.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index 5a1499242744849a21071ae6c5d4c29f359afb78..c5a50b833b97de2978e37ae5769e524f001a0520 100644
+index 9dc125d900a7aa190e3664b576236a5924d4d45e..4d7f153c368d0405581a66f1e562f51fc91064d0 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
-@@ -688,6 +688,11 @@ bool IsTesting() {
+@@ -697,6 +697,11 @@ bool IsTesting() {
  
    blink::WebGestureEvent web_gesture =
        ui::CreateWebGestureEventFromGestureEventData(gesture);
@@ -46,7 +46,7 @@ index 5a1499242744849a21071ae6c5d4c29f359afb78..c5a50b833b97de2978e37ae5769e524f
    SendGestureEvent(web_gesture);
  }
  
-@@ -886,8 +891,8 @@ bool IsTesting() {
+@@ -895,8 +900,8 @@ bool IsTesting() {
      handleViews[1].subviews[1].layer.transform =
          CATransform3DMakeScale(shrink, shrink, 1);
    } else {
@@ -57,7 +57,7 @@ index 5a1499242744849a21071ae6c5d4c29f359afb78..c5a50b833b97de2978e37ae5769e524f
      [ui_view_->view_ selectionDidClear];
    }
  #endif
-@@ -955,6 +960,11 @@ bool IsTesting() {
+@@ -962,6 +967,11 @@ bool IsTesting() {
  #endif
        break;
      }

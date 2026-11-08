@@ -34,7 +34,7 @@ Later that day --wasm-jitless came back, last, with DrumBrake fixed;
 verified in the iOS 27 simulator that WebAssembly is exposed and runs.
 
 diff --git a/content/app/content_main.cc b/content/app/content_main.cc
-index 0fd60fa820805069ff01a2442f14de2b5e984e5a..f09c99dfe5529386094d3ed969d697c5e559cef5 100644
+index 53ad96889594b4ac5ed189bd11e7b01e5b6129e4..24a7196c2770677bead7078f2665f1d79837a7ea 100644
 --- a/content/app/content_main.cc
 +++ b/content/app/content_main.cc
 @@ -27,6 +27,7 @@
@@ -131,7 +131,7 @@ index 0fd60fa820805069ff01a2442f14de2b5e984e5a..f09c99dfe5529386094d3ed969d697c5
  bool IsSubprocess() {
    auto type = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
        switches::kProcessType);
-@@ -300,6 +380,9 @@ NO_STACK_PROTECTOR int RunContentProcess(
+@@ -288,6 +368,9 @@ NO_STACK_PROTECTOR int RunContentProcess(
      // Enable spatial navigation; we interpret remote control swipes as arrow
      // keys.
      command_line->AppendSwitch(switches::kEnableSpatialNavigation);

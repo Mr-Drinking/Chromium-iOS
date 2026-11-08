@@ -97,7 +97,7 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 
 ```bash
 scripts/03-build.sh device
-scripts/05-package-ipa.sh            # → dist/Chromium-159.0.8129.0-sideload.ipa
+scripts/05-package-ipa.sh            # → dist/Chromium-159.0.8149.0-sideload.ipa
 ```
 
 产物未签名（如需让侧载工具开通 Chrome 的两个应用组，加 `--with-app-groups`，见第 6 节）。安装方式三选一：
@@ -145,7 +145,7 @@ scripts/05-package-ipa.sh            # → dist/Chromium-159.0.8129.0-sideload.i
 
 1. 在 `~/chromium/src` 的 `ios-blink-sideload` 分支上直接改代码、编译、测试。
 2. 修改完提交到对应补丁的 commit（`git commit --fixup` 加 `git rebase -i --autosquash`，或新开一个 commit 作为新补丁）。
-3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 3313f827..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变；早期手写的 0002、0003 例外，格式不同、内容等价，别替换），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。现在没有 V8 补丁（158 上用过的 `v8/0201` 在 159 上不需要了）。以后要改 V8，补丁放 `patches/v8/`，在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `0388bc74`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index 0388bc74..HEAD -o /tmp/new-v8-patches`，`series` 里写成 `src/v8:v8/02xx-….patch`。
+3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 34d81e7b..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变；早期手写的 0002、0003 例外，格式不同、内容等价，别替换），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。现在没有 V8 补丁（158 上用过的 `v8/0201` 在 159 上不需要了）。以后要改 V8，补丁放 `patches/v8/`，在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `0388bc74`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index 0388bc74..HEAD -o /tmp/new-v8-patches`，`series` 里写成 `src/v8:v8/02xx-….patch`。
 4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。只想核对 `patches/` 和分支是否一致时，也可以不碰工作区（重置分支会刷新补丁涉及文件的时间戳，引起不少重编）：设一个临时的 `GIT_INDEX_FILE`，`git read-tree 3313f827` 后按 `series` 依次 `git apply --cached`，再比较 `git write-tree` 和 `git rev-parse 'ios-blink-sideload^{tree}'`。
 5. 更新 `docs/status.md`，提交本仓库。
 

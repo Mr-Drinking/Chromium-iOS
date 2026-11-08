@@ -44,8 +44,17 @@ camera prompt, "allow once" gives a video track, a second request on
 the page does not ask, and after a reload it asks again. Not verified
 on a device: a real camera and microphone.
 
+Rebased onto 34d81e7b (159.0.8149.0): dropped
+GetPermissionResultForEmbeddedRequester(), which upstream removed from
+PermissionControllerDelegate along with TOP_LEVEL_STORAGE_ACCESS.
+Re-verified there in the iOS 27 simulator: permissions.query() gives the
+states above; getCurrentPosition() shows the site's alert and, once
+allowed, returns the simulated location; after writeText(), readText()
+returns the text; geolocation and clipboard-read then query as granted.
+The camera was not rechecked.
+
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
-index 56750acb7f278013c2e560186ae344cccaddd8c2..f493dc9733eb332b2009c550b6f8da890ed77c79 100644
+index 7b613b56b631e81212ca426e388b51c89a1143b7..1b7a6629e87a059d32cacfd5a0a1fef7f19fbf5a 100644
 --- a/ios/web/content/BUILD.gn
 +++ b/ios/web/content/BUILD.gn
 @@ -17,6 +17,8 @@ source_set("content") {
@@ -57,7 +66,7 @@ index 56750acb7f278013c2e560186ae344cccaddd8c2..f493dc9733eb332b2009c550b6f8da89
      "download/content_download_manager_delegate.h",
      "download/content_download_manager_delegate.mm",
      "download/content_download_task.h",
-@@ -58,6 +60,8 @@ source_set("content") {
+@@ -59,6 +61,8 @@ source_set("content") {
      "//components/javascript_dialogs",
      "//components/js_injection/browser",
      "//components/js_injection/common:common_mojom",
@@ -66,7 +75,7 @@ index 56750acb7f278013c2e560186ae344cccaddd8c2..f493dc9733eb332b2009c550b6f8da89
      "//content/public/browser",
      "//ios/web/annotations",
      "//ios/web/common",
-@@ -80,6 +84,8 @@ source_set("content") {
+@@ -81,6 +85,8 @@ source_set("content") {
      "//ios/web/webui",
      "//net",
      "//third_party/abseil-cpp:absl",
@@ -147,10 +156,10 @@ index 06231782a04e0a7d7d7fe06865b968cc1a2f4655..d7e50658a04b184c8b774c41203771f4
  content::ClientHintsControllerDelegate*
 diff --git a/ios/web/content/content_permission_manager.h b/ios/web/content/content_permission_manager.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..6a4d0a7fcfa39764deb3c0860407711bd2cc5a3e
+index 0000000000000000000000000000000000000000..4d84ddf582b1edfc8c1b11f320b54bf62b81d042
 --- /dev/null
 +++ b/ios/web/content/content_permission_manager.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,82 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -206,10 +215,6 @@ index 0000000000000000000000000000000000000000..6a4d0a7fcfa39764deb3c0860407711b
 +      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
 +      content::RenderProcessHost* render_process_host,
 +      const GURL& worker_origin) override;
-+  content::PermissionResult GetPermissionResultForEmbeddedRequester(
-+      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
-+      content::RenderFrameHost* render_frame_host,
-+      const url::Origin& requesting_origin) override;
 +  void ResetPermission(blink::PermissionType permission,
 +                       const GURL& requesting_origin,
 +                       const GURL& embedding_origin) override;
@@ -239,10 +244,10 @@ index 0000000000000000000000000000000000000000..6a4d0a7fcfa39764deb3c0860407711b
 +#endif  // IOS_WEB_CONTENT_CONTENT_PERMISSION_MANAGER_H_
 diff --git a/ios/web/content/content_permission_manager.mm b/ios/web/content/content_permission_manager.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..fa2a10a2676a2971c75233beffe94c8ccf837d65
+index 0000000000000000000000000000000000000000..264d4e74f081e8ba00982cfeb44f45ad5c946a34
 --- /dev/null
 +++ b/ios/web/content/content_permission_manager.mm
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,253 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -264,6 +269,7 @@ index 0000000000000000000000000000000000000000..fa2a10a2676a2971c75233beffe94c8c
 +#import "third_party/blink/public/common/permissions/permission_utils.h"
 +#import "ui/base/l10n/l10n_util.h"
 +#import "ui/base/l10n/l10n_util_mac.h"
++#import "url/gurl.h"
 +
 +namespace web {
 +
@@ -487,19 +493,6 @@ index 0000000000000000000000000000000000000000..fa2a10a2676a2971c75233beffe94c8c
 +      url::Origin::Create(worker_origin)));
 +}
 +
-+content::PermissionResult
-+ContentPermissionManager::GetPermissionResultForEmbeddedRequester(
-+    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
-+    content::RenderFrameHost* render_frame_host,
-+    const url::Origin& requesting_origin) {
-+  if (render_frame_host->IsNestedWithinFencedFrame()) {
-+    return content::PermissionResult(PermissionStatus::DENIED);
-+  }
-+  return content::PermissionResult(GetStatus(
-+      blink::PermissionDescriptorToPermissionType(permission_descriptor),
-+      SiteOrigin(render_frame_host)));
-+}
-+
 +void ContentPermissionManager::ResetPermission(
 +    blink::PermissionType permission,
 +    const GURL& requesting_origin,
@@ -620,10 +613,10 @@ index 80c2c1008821b97ab2ef8c4c495de1fc4c9ed300..48875befa85e43bd18357cac86e7752f
        content::WebContents* web_contents) override;
    content::GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
 diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
-index 77cf532344460bb65c20594eaad510dc5ba7cf8e..bba29edf247ffa864f6f3248c1e766cdefac130a 100644
+index 18081b9cafb9292a097b4a41357d5a864128c2d1..a3ea845fd24d44711e4ff1e1cf19cca55db49420 100644
 --- a/ios/web/content/web_state/content_web_state.h
 +++ b/ios/web/content/web_state/content_web_state.h
-@@ -178,6 +178,7 @@ class ContentWebState : public WebState,
+@@ -180,6 +180,7 @@ class ContentWebState : public WebState,
        content::NavigationHandle* navigation_handle) override;
    void DidFinishNavigation(
        content::NavigationHandle* navigation_handle) override;
@@ -631,7 +624,7 @@ index 77cf532344460bb65c20594eaad510dc5ba7cf8e..bba29edf247ffa864f6f3248c1e766cd
    void DidStartLoading() override;
    void DidStopLoading() override;
    void DidFinishLoad(content::RenderFrameHost* render_frame_host,
-@@ -241,6 +242,13 @@ class ContentWebState : public WebState,
+@@ -234,6 +235,13 @@ class ContentWebState : public WebState,
  
    content::JavaScriptDialogManager* GetJavaScriptDialogManager(
        content::WebContents* source) override;
@@ -645,9 +638,9 @@ index 77cf532344460bb65c20594eaad510dc5ba7cf8e..bba29edf247ffa864f6f3248c1e766cd
  
   private:
    // Store serialized state.
-@@ -275,6 +283,10 @@ class ContentWebState : public WebState,
-   bool top_control_scroll_in_progress_ = false;
-   bool cached_shrink_controls_ = false;
+@@ -266,6 +274,10 @@ class ContentWebState : public WebState,
+   std::map<ContentWorld, std::unique_ptr<ContentWebFramesManager>> managers_;
+   FaviconStatus favicon_status_;
    bool created_with_opener_ = false;
 +  // [ios-blink-sideload] Whether the page may use the camera and the
 +  // microphone, once asked. Kept until another page shows, as WebKit does.
@@ -657,7 +650,7 @@ index 77cf532344460bb65c20594eaad510dc5ba7cf8e..bba29edf247ffa864f6f3248c1e766cd
    id keyboard_hiding_observer_;
    int keyboard_height_ = 0;
 diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
-index 37338cbeb969522febe898f96c62ceecf57306b8..01c54b4d59ad11f0943558d7a82a51b6df4052ae 100644
+index 38b7cb940588c7312d90cc115f4cbe8efa041d5f..acc610ceef30fceeddbcd49cf054bde156a00346 100644
 --- a/ios/web/content/web_state/content_web_state.mm
 +++ b/ios/web/content/web_state/content_web_state.mm
 @@ -4,6 +4,9 @@
@@ -695,9 +688,9 @@ index 37338cbeb969522febe898f96c62ceecf57306b8..01c54b4d59ad11f0943558d7a82a51b6
  #import "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 +#import "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
  #import "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
- #import "ui/display/display.h"
- #import "ui/display/screen.h"
-@@ -695,6 +702,11 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+ #import "ui/base/mojom/window_open_disposition.mojom-shared.h"
+ 
+@@ -697,6 +704,11 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
    }
  }
  
@@ -709,7 +702,7 @@ index 37338cbeb969522febe898f96c62ceecf57306b8..01c54b4d59ad11f0943558d7a82a51b6
  void ContentWebState::DidStartLoading() {
    for (auto& observer : observers_) {
      observer.DidStartLoading(this);
-@@ -942,4 +954,129 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -890,4 +902,129 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
    return dialog;
  }
  

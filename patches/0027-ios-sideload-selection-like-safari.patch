@@ -42,10 +42,10 @@ pressing a link still shows Chrome's link menu, with no loupe or tick.
 Haptics can't be felt in the simulator.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index c5a50b833b97de2978e37ae5769e524f001a0520..f58bc11361e8523799938beb58304cb10c9edc98 100644
+index 4d7f153c368d0405581a66f1e562f51fc91064d0..b9dc24e756142a67f8e628bcc5a893f10e218a31 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
-@@ -691,6 +691,9 @@ bool IsTesting() {
+@@ -700,6 +700,9 @@ bool IsTesting() {
  #if !BUILDFLAG(IS_IOS_TVOS)
    if (gesture.type() == ui::EventType::kGestureTap) {
      [ui_view_->view_ willSendTap];
@@ -55,7 +55,7 @@ index c5a50b833b97de2978e37ae5769e524f001a0520..f58bc11361e8523799938beb58304cb1
    }
  #endif
    SendGestureEvent(web_gesture);
-@@ -871,25 +874,9 @@ bool IsTesting() {
+@@ -880,25 +883,9 @@ bool IsTesting() {
      [[ui_view_->view_ textInteraction] refreshKeyboardUI];
      [[ui_view_->view_ textInteraction] textSelectionDisplayInteraction]
          .activated = YES;
@@ -277,7 +277,7 @@ index 1bdca76040d9b85d47518c21441ab81703573461..4014c4e11fbaa7e98ad5656e90cdfaa5
      if (BETextInteraction* text_interaction =
              base::apple::ObjCCast<BETextInteraction>(interaction)) {
 diff --git a/third_party/blink/renderer/core/layout/inline/inline_cursor.cc b/third_party/blink/renderer/core/layout/inline/inline_cursor.cc
-index 740505fc82ac88d655ebc76fee63c6c0ff6862c6..9320184a04c395e9f81f6ddc4ae93fbe6d69613d 100644
+index 7e29635ea72c0fb960f4e4582de081b4f53fad3b..a416d596517874b3713c92240cdcbebb6d246235 100644
 --- a/third_party/blink/renderer/core/layout/inline/inline_cursor.cc
 +++ b/third_party/blink/renderer/core/layout/inline/inline_cursor.cc
 @@ -9,6 +9,7 @@

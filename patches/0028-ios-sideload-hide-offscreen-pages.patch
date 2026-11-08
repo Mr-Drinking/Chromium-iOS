@@ -169,12 +169,12 @@ index 1ba5fa37cf9e42b856ad0b3109bf0b370ef304f1..ea68df4ee80f6f3107f595b102ffc4bb
    return gfx::NativeView(ui_view_->view_);
  }
 diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
-index bba29edf247ffa864f6f3248c1e766cdefac130a..e8a5525584201c2a23d7eccac05ed1ef09d83e5c 100644
+index a3ea845fd24d44711e4ff1e1cf19cca55db49420..1915a16b24de4671abadee8c1d6d916fb711e801 100644
 --- a/ios/web/content/web_state/content_web_state.h
 +++ b/ios/web/content/web_state/content_web_state.h
-@@ -283,6 +283,8 @@ class ContentWebState : public WebState,
-   bool top_control_scroll_in_progress_ = false;
-   bool cached_shrink_controls_ = false;
+@@ -274,6 +274,8 @@ class ContentWebState : public WebState,
+   std::map<ContentWorld, std::unique_ptr<ContentWebFramesManager>> managers_;
+   FaviconStatus favicon_status_;
    bool created_with_opener_ = false;
 +  // [ios-blink-sideload] Whether Chrome shows the tab (see IsVisible()).
 +  bool is_visible_ = false;
@@ -182,10 +182,10 @@ index bba29edf247ffa864f6f3248c1e766cdefac130a..e8a5525584201c2a23d7eccac05ed1ef
    // microphone, once asked. Kept until another page shows, as WebKit does.
    std::optional<bool> camera_allowed_;
 diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
-index 01c54b4d59ad11f0943558d7a82a51b6df4052ae..766cb8456e902d2c5113b6f7b455a5207f7d3a60 100644
+index acc610ceef30fceeddbcd49cf054bde156a00346..0bb302827789fc03b2760b48ac855433154e79a0 100644
 --- a/ios/web/content/web_state/content_web_state.mm
 +++ b/ios/web/content/web_state/content_web_state.mm
-@@ -164,6 +164,10 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -163,6 +163,10 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
    scoped_refptr<content::SiteInstance> site_instance;
    content::WebContents::CreateParams createParams(browser_context,
                                                    site_instance);
@@ -196,7 +196,7 @@ index 01c54b4d59ad11f0943558d7a82a51b6df4052ae..766cb8456e902d2c5113b6f7b455a520
    created_with_opener_ = params.created_with_opener;
    if (created_with_opener_) {
      ContentWebState* opener_web_state =
-@@ -332,6 +336,7 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -331,6 +335,7 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
  
  void ContentWebState::WasShown() {
    ForceRealized();
@@ -204,7 +204,7 @@ index 01c54b4d59ad11f0943558d7a82a51b6df4052ae..766cb8456e902d2c5113b6f7b455a520
  
    // Update last active time when the ContentWebState transition to visible.
    last_active_time_ = base::Time::Now();
-@@ -343,6 +348,7 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -342,6 +347,7 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
  
  void ContentWebState::WasHidden() {
    ForceRealized();
@@ -212,7 +212,7 @@ index 01c54b4d59ad11f0943558d7a82a51b6df4052ae..766cb8456e902d2c5113b6f7b455a520
    for (auto& observer : observers_) {
      observer.WasHidden(this);
    }
-@@ -456,9 +462,10 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -455,9 +461,10 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
  }
  
  bool ContentWebState::IsVisible() const {
@@ -226,7 +226,7 @@ index 01c54b4d59ad11f0943558d7a82a51b6df4052ae..766cb8456e902d2c5113b6f7b455a520
  }
  
  bool ContentWebState::IsCrashed() const {
-@@ -752,11 +759,11 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -754,11 +761,11 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
    // Occlusion is not supported on iOS.
    DCHECK_NE(visibility, content::Visibility::OCCLUDED);
  

@@ -48,7 +48,7 @@ before, also right after a chrome:// page; chrome://chrome-urls shows
 only its title. Not checked on a device.
 
 diff --git a/content/browser/loader/navigation_url_loader_impl.cc b/content/browser/loader/navigation_url_loader_impl.cc
-index b6cca8069223bb37bbd11f49d70986112b398d5b..db84b1e43c1d6b4ed0aa4058370bbcf86701e117 100644
+index b9cc368692d5880104f03642a270356af2decf34..33e7b29144687d326c67d9edd62970aa3e5a4b3b 100644
 --- a/content/browser/loader/navigation_url_loader_impl.cc
 +++ b/content/browser/loader/navigation_url_loader_impl.cc
 @@ -709,14 +709,25 @@ void NavigationURLLoaderImpl::Start() {
@@ -82,10 +82,10 @@ index b6cca8069223bb37bbd11f49d70986112b398d5b..db84b1e43c1d6b4ed0aa4058370bbcf8
                    browser_context_, frame_tree_node->current_frame_host(),
                    frame_tree_node->current_frame_host()
 diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
-index f8610e9525a37600e217fd59f75e29735f272768..50762444a9323ef77a65c4304f1e9c247312222b 100644
+index e3c58ef8151c2f09f55dd11b0a43d5cffad25162..99f8465cf7727a8637eee59a545ad770acc2e592 100644
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
-@@ -13490,8 +13490,16 @@ void RenderFrameHostImpl::CommitNavigation(
+@@ -13507,8 +13507,16 @@ void RenderFrameHostImpl::CommitNavigation(
                subresource_loader_factories_config.ukm_source_id()),
            devtools_instrumentation::WillCreateURLLoaderFactoryParams::ForFrame(
                this));
@@ -310,10 +310,10 @@ index 6883106f53b2c9fab0d9337b598003a006b77045..48d0b21dc58a54afed240911dc59797f
                                               content_web_state_);
  }
 diff --git a/ios/web/content/web_state/content_web_state.h b/ios/web/content/web_state/content_web_state.h
-index e8a5525584201c2a23d7eccac05ed1ef09d83e5c..c98bcd1edd411fd4a35df5ae5a2a7f961d595e7f 100644
+index 1915a16b24de4671abadee8c1d6d916fb711e801..1a7c06bef6211bb7839a17ce998f9b4f026e93bb 100644
 --- a/ios/web/content/web_state/content_web_state.h
 +++ b/ios/web/content/web_state/content_web_state.h
-@@ -49,6 +49,9 @@ class WebContents;
+@@ -50,6 +50,9 @@ class WebContents;
  
  namespace web {
  
@@ -323,8 +323,8 @@ index e8a5525584201c2a23d7eccac05ed1ef09d83e5c..c98bcd1edd411fd4a35df5ae5a2a7f96
  // ContentWebState is an implementation of WebState that's based on WebContents.
  class ContentWebState : public WebState,
                          public content::WebContentsObserver,
-@@ -170,12 +173,21 @@ class ContentWebState : public WebState,
-   void CreateFullPagePdf(base::OnceCallback<void(NSData*)> callback) override;
+@@ -172,12 +175,21 @@ class ContentWebState : public WebState,
+                  base::OnceCallback<void(NSData*)> callback) override;
    void CloseMediaPresentations() override;
  
 +  // [ios-blink-sideload] Handles a chrome.send() message from a chrome://
@@ -345,7 +345,7 @@ index e8a5525584201c2a23d7eccac05ed1ef09d83e5c..c98bcd1edd411fd4a35df5ae5a2a7f96
    void DidFinishNavigation(
        content::NavigationHandle* navigation_handle) override;
    void PrimaryPageChanged(content::Page& page) override;
-@@ -259,6 +271,11 @@ class ContentWebState : public WebState,
+@@ -252,6 +264,11 @@ class ContentWebState : public WebState,
                    WebStateID unique_identifier,
                    std::unique_ptr<SerializedState> serialized_state);
  
@@ -357,7 +357,7 @@ index e8a5525584201c2a23d7eccac05ed1ef09d83e5c..c98bcd1edd411fd4a35df5ae5a2a7f96
    // Helper method to register notification observers.
    void RegisterNotificationObservers();
    void OnKeyboardShow(NSNotification* notification);
-@@ -289,6 +306,11 @@ class ContentWebState : public WebState,
+@@ -280,6 +297,11 @@ class ContentWebState : public WebState,
    // microphone, once asked. Kept until another page shows, as WebKit does.
    std::optional<bool> camera_allowed_;
    std::optional<bool> microphone_allowed_;
@@ -370,7 +370,7 @@ index e8a5525584201c2a23d7eccac05ed1ef09d83e5c..c98bcd1edd411fd4a35df5ae5a2a7f96
    id keyboard_hiding_observer_;
    int keyboard_height_ = 0;
 diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
-index 7e09ba98844196a87b31ce2683c3809756f5eb49..4aefd29808451a18206ea496ba32e2c8813096a7 100644
+index e9c5601cbf1132518381a10e93e5a591a4436c8a..536fe34d5ccc59a0d89d2a30de85844966ab94be 100644
 --- a/ios/web/content/web_state/content_web_state.mm
 +++ b/ios/web/content/web_state/content_web_state.mm
 @@ -16,12 +16,17 @@
@@ -409,7 +409,7 @@ index 7e09ba98844196a87b31ce2683c3809756f5eb49..4aefd29808451a18206ea496ba32e2c8
  #import "net/cert/x509_util.h"
  #import "net/cert/x509_util_apple.h"
  #import "services/network/public/mojom/referrer_policy.mojom-shared.h"
-@@ -215,6 +224,9 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -214,6 +223,9 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
  }
  
  ContentWebState::~ContentWebState() {
@@ -419,7 +419,7 @@ index 7e09ba98844196a87b31ce2683c3809756f5eb49..4aefd29808451a18206ea496ba32e2c8
    WebContentsObserver::Observe(nullptr);
    for (auto& observer : observers_) {
      observer.WebStateDestroyed(this);
-@@ -675,11 +687,75 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -677,11 +689,75 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
  
  void ContentWebState::CloseMediaPresentations() {}
  
@@ -495,7 +495,7 @@ index 7e09ba98844196a87b31ce2683c3809756f5eb49..4aefd29808451a18206ea496ba32e2c8
    auto* context =
        ContentNavigationContext::GetOrCreate(navigation_handle, this);
    for (auto& observer : observers_) {
-@@ -699,11 +775,37 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -701,11 +777,37 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
    }
  }
  

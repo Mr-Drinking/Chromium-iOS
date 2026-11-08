@@ -34,11 +34,18 @@ the first version of this change, a 1.5 s limit removed the picture
 while the page was still busy, and the old frame showed in a corner).
 Not checked on a device.
 
+Rebased onto 34d81e7b (159.0.8149.0): merged into upstream's reworked
+UpdateScreenInfo(). Re-verified there in the iOS 27 simulator, with
+screenshots every 0.4 s while turning the same page from portrait to
+landscape and back: the scaled picture stays until the page has drawn at
+its new size, and turning to portrait shows the page's color below it;
+no gray area.
+
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
-index 0d4bf31e4213680fe529d24e4affee4d7ae91c12..dabfed17eec54465afc7a5139d5d5bf824e013f5 100644
+index bc8ebf032006cb54afa515c9c2214990b4b538dd..14e301a8d4177b9694ec63e167b63be9f3fa70b3 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.h
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.h
-@@ -236,6 +236,9 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+@@ -241,6 +241,9 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
    void ContentInsetChanged();
    // [ios-blink-sideload] Called when the scroll view's contentOffset changes.
    void ContentOffsetChanged();
@@ -48,7 +55,7 @@ index 0d4bf31e4213680fe529d24e4affee4d7ae91c12..dabfed17eec54465afc7a5139d5d5bf8
  #if !BUILDFLAG(IS_IOS_TVOS)
    void OnKeyboardVisibilityChanged();
  #endif  // !BUILDFLAG(IS_IOS_TVOS)
-@@ -308,6 +311,12 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
+@@ -316,6 +319,12 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
    // keyboard, until a frame with it is active.
    viz::LocalSurfaceId keyboard_surface_id_;
  
@@ -62,7 +69,7 @@ index 0d4bf31e4213680fe529d24e4affee4d7ae91c12..dabfed17eec54465afc7a5139d5d5bf8
    // we do not change its size during scroll.
    gfx::Rect view_bounds_;
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index 65581bca426dda51419bd7343ca2cb735475b5fb..def6c042b868265a0530b3db3ea47f3ca09ff332 100644
+index bac9d1a71327fa9cec7e2ba546c1ee22a7745e33..6ad11676ea99737655d072f805d8a8a02844c29e 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
 @@ -30,6 +30,7 @@
@@ -73,7 +80,7 @@ index 65581bca426dda51419bd7343ca2cb735475b5fb..def6c042b868265a0530b3db3ea47f3c
  #include "ui/accelerated_widget_mac/display_ca_layer_tree.h"
  #include "ui/base/ime/text_input_mode.h"
  #include "ui/base/ime/text_input_type.h"
-@@ -410,8 +411,14 @@ bool IsTesting() {
+@@ -411,8 +412,14 @@ bool IsTesting() {
    if (!color) {
      return;
    }
@@ -90,10 +97,10 @@ index 65581bca426dda51419bd7343ca2cb735475b5fb..def6c042b868265a0530b3db3ea47f3c
  }
  
  void RenderWidgetHostViewIOS::
-@@ -488,6 +495,10 @@ bool IsTesting() {
- 
-   if (!IsTesting() && (size_changed || screen_info_changed)) {
-     browser_compositor_->UpdateSurfaceFromUIView(view_bounds_dips.size());
+@@ -496,6 +503,10 @@ bool IsTesting() {
+   if (!use_fixed_size_for_testing_ &&
+       (compositor_size_changed || screen_info_changed)) {
+     browser_compositor_->UpdateSurfaceFromUIView(native_view_size);
 +    // [ios-blink-sideload] See OnAnimatedResizeStarted().
 +    if (awaiting_resize_frame_) {
 +      resize_surface_id_ = GetLocalSurfaceId();
@@ -101,7 +108,7 @@ index 65581bca426dda51419bd7343ca2cb735475b5fb..def6c042b868265a0530b3db3ea47f3c
    }
    ComputeDisplayFeature();
  
-@@ -520,6 +531,13 @@ bool IsTesting() {
+@@ -529,6 +540,13 @@ bool IsTesting() {
    display_tree_->UpdateCALayerTree(std::move(ca_layer_params));
  }
  
@@ -115,7 +122,7 @@ index 65581bca426dda51419bd7343ca2cb735475b5fb..def6c042b868265a0530b3db3ea47f3c
  void RenderWidgetHostViewIOS::OnOldViewDidNavigatePreCommit() {
    CHECK(browser_compositor_) << "Shouldn't be called during destruction!";
    browser_compositor_->DidNavigateMainFramePreCommit();
-@@ -1090,6 +1108,22 @@ bool IsTesting() {
+@@ -1102,6 +1120,22 @@ bool IsTesting() {
        input_handler->ScrollFocusedEditableNodeIntoView();
      }
    }

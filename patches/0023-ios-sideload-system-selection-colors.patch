@@ -44,7 +44,7 @@ index 8ec46f22d966be95ccf47498eb6f71a986ff9586..9ff724f97a31564acbba7ddb8b2f1d74
  }
  
 diff --git a/third_party/blink/renderer/core/editing/caret_display_item_client.cc b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
-index 94fd3ed043bb8c173325d636f045306cee47bb82..6cb28eac756869b5c9097c670bf7774a7ac29c66 100644
+index 3afebb08c2f7d488008f82c3caa44680dbb01a90..877943d421a3a87cb79243195c7ea1e26d273a91 100644
 --- a/third_party/blink/renderer/core/editing/caret_display_item_client.cc
 +++ b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
 @@ -27,6 +27,7 @@
@@ -81,10 +81,10 @@ index 94fd3ed043bb8c173325d636f045306cee47bb82..6cb28eac756869b5c9097c670bf7774a
      needs_paint_invalidation_ = true;
      color_ = new_color;
 diff --git a/third_party/blink/renderer/core/frame/local_frame_view.cc b/third_party/blink/renderer/core/frame/local_frame_view.cc
-index d3c3a5805e518116dc7c8dcfb8d0b0df68c9cd17..de9871ab0028810fe3fef35445d446f3ba02a237 100644
+index 3fd80748467b8ca5639000041f12bff97ccfa85c..bce41211c6a76f9ce9ae7a80c24ba42bb58ac470 100644
 --- a/third_party/blink/renderer/core/frame/local_frame_view.cc
 +++ b/third_party/blink/renderer/core/frame/local_frame_view.cc
-@@ -5351,8 +5351,15 @@ void LocalFrameView::MapLocalToRemoteMainFrame(
+@@ -5489,8 +5489,15 @@ void LocalFrameView::MapLocalToRemoteMainFrame(
  }
  
  LayoutUnit LocalFrameView::BarCaretWidth() const {
@@ -124,10 +124,10 @@ index 61f5f9579cc0644ec6ee68777e1bbd09c1168d89..7d6db0b539a9f2058cfc7ad59c6fd6aa
   private:
    ~LayoutThemeIOS() override;
 diff --git a/third_party/blink/renderer/core/layout/layout_theme_ios.mm b/third_party/blink/renderer/core/layout/layout_theme_ios.mm
-index 75ced28931e87b8765efb5dd3dc714999f6009b5..ca9bae187714fa75db7cef7e450ee969f0d55b46 100644
+index 670a1ff9a567dd83bc4fa2a337d54b2af4d7c0e9..88bd00901c8e6da87efc201c117c6e65708c7379 100644
 --- a/third_party/blink/renderer/core/layout/layout_theme_ios.mm
 +++ b/third_party/blink/renderer/core/layout/layout_theme_ios.mm
-@@ -21,12 +21,21 @@
+@@ -22,12 +22,21 @@
  
  LayoutThemeIOS::~LayoutThemeIOS() {}
  

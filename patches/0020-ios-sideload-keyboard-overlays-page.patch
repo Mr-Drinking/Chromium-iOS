@@ -41,8 +41,19 @@ keyboard and the accessory bar, the same in three tries; typing
 brings the visual viewport back to 631. The page now shows behind the
 keyboard.
 
+Rebased onto 34d81e7b (159.0.8149.0): upstream now adds the keyboard in
+FullscreenBrowserAgent::content_insets(), which sets the bottom content
+inset of the web view's scroll view, instead of in the obscured insets,
+so the keyboard is left out there. Re-verified there in the iOS 27
+simulator with the on-screen Pinyin keyboard: innerHeight stays at 631
+while the visual viewport goes to 314, the same as at 3313f827; a field
+at the bottom of a long page scrolls 317 into view above the accessory
+bar; Done brings the visual viewport back to 631. With the address bar
+at the bottom, innerHeight stays at 623 while the visual viewport goes
+to 368.
+
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.h b/content/browser/renderer_host/render_widget_host_view_ios.h
-index 234ae36c8121cad8dc36cd58d3b8e4fedb20bf1c..fa8b9a090fe32b358bac415aedd834b057a35e5d 100644
+index a7ad219d2c31c7108685ab1ffaa82d3dd893b10d..e38c6f4e25992d21cdbef4223dfa631039f3553f 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.h
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.h
 @@ -194,7 +194,7 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
@@ -54,9 +65,9 @@ index 234ae36c8121cad8dc36cd58d3b8e4fedb20bf1c..fa8b9a090fe32b358bac415aedd834b0
    void OnRenderFrameSubmission() override {}
    void OnLocalSurfaceIdChanged(
        const cc::RenderFrameMetadata& metadata) override {}
-@@ -296,6 +296,10 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
-   std::optional<gfx::PointF> last_root_scroll_offset_;
+@@ -304,6 +304,10 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
    bool is_scrolling_ = false;
+   bool use_fixed_size_for_testing_;
  
 +  // [ios-blink-sideload] The surface id of the visible viewport for the
 +  // keyboard, until a frame with it is active.
@@ -66,10 +77,10 @@ index 234ae36c8121cad8dc36cd58d3b8e4fedb20bf1c..fa8b9a090fe32b358bac415aedd834b0
    // we do not change its size during scroll.
    gfx::Rect view_bounds_;
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index dbbdeddc0a0da5d076913aff5a9313fb6485df4f..5a1499242744849a21071ae6c5d4c29f359afb78 100644
+index 7c6914167b9d3cb452d11efedc77801e5675666e..9dc125d900a7aa190e3664b576236a5924d4d45e 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
-@@ -1035,16 +1035,37 @@ bool IsTesting() {
+@@ -1047,16 +1047,37 @@ bool IsTesting() {
  
  #if !BUILDFLAG(IS_IOS_TVOS)
  void RenderWidgetHostViewIOS::OnKeyboardVisibilityChanged() {
@@ -188,7 +199,7 @@ index 64a4a6f68907dc6f84d041ceba79d9178f8e9ba0..ba6031398ebb2b8db73ca8ad644160ec
      "//ios/chrome/browser/shared/model/browser",
      "//ios/chrome/browser/shared/public/commands",
 diff --git a/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm b/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
-index f76079c0e01c53567b10a202d6ad155af95ceeb3..1d12e1fe67068b3175ed87cfdf8e26a61df1780b 100644
+index 4f8defff2fe79ad04682227d43045cd7880e26f4..5907a7eb4d78a525f6127ced790a6d9ec916277b 100644
 --- a/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
 +++ b/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
 @@ -13,6 +13,7 @@
@@ -199,13 +210,14 @@ index f76079c0e01c53567b10a202d6ad155af95ceeb3..1d12e1fe67068b3175ed87cfdf8e26a6
  #import "ios/chrome/browser/fullscreen/model/fullscreen_constants.h"
  #import "ios/chrome/browser/fullscreen/model/fullscreen_progress_animator.h"
  #import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
-@@ -21,6 +22,14 @@
+@@ -21,6 +22,15 @@
  
  namespace {
  
-+// [ios-blink-sideload] Whether the keyboard adds to the web view's bottom
-+// inset. Not with Blink: there, an inset shrinks the web view, so the page was
-+// laid out again whenever the keyboard showed, hid or changed height, and the
++// [ios-blink-sideload] Whether the keyboard adds to the bottom content inset
++// of the web view's scroll view (content_insets()). Not with Blink: there, the
++// scroll view's content inset shrinks the web view, so the page was laid out
++// again whenever the keyboard showed, hid or changed height, and the
 +// translucent keyboard had nothing behind it. Blink handles the keyboard
 +// itself, by shrinking only the visual viewport (as Safari and Chrome for
 +// Android do).
@@ -214,23 +226,15 @@ index f76079c0e01c53567b10a202d6ad155af95ceeb3..1d12e1fe67068b3175ed87cfdf8e26a6
  // Updates the fractional `progress` of the fullscreen UI layer by interpreting
  // a `scroll` distance. Evaluates the `scroll` as a percentage of the total
  // compressible space (`delta`) and clamps the result between 0.0 (fullscreen)
-@@ -390,7 +399,7 @@ constexpr FullscreenState SettledStateForTransition(
-   }
+@@ -382,7 +392,8 @@ constexpr FullscreenState SettledStateForTransition(
  
-   // Apply keyboard height as overlapping.
+ UIEdgeInsets FullscreenBrowserAgent::content_insets() const {
+   UIEdgeInsets content_insets = insets_;
 -  if (keyboard_obscured_inset_ > 0) {
++  // [ios-blink-sideload] See kKeyboardInsetsWebView.
 +  if (kKeyboardInsetsWebView && keyboard_obscured_inset_ > 0) {
-     insets_.bottom = std::max(insets_.bottom, keyboard_obscured_inset_);
-   }
- 
-@@ -552,7 +561,7 @@ constexpr FullscreenState SettledStateForTransition(
-   }
- 
-   // Apply keyboard height as overlapping.
--  if (keyboard_obscured_inset_ > 0) {
-+  if (kKeyboardInsetsWebView && keyboard_obscured_inset_ > 0) {
-     min_insets_.bottom = std::max(min_insets_.bottom, keyboard_obscured_inset_);
-     max_insets_.bottom = std::max(max_insets_.bottom, keyboard_obscured_inset_);
+     content_insets.bottom =
+         std::max(content_insets.bottom, keyboard_obscured_inset_);
    }
 -- 
 2.54.0 (Apple Git-157)

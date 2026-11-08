@@ -22,10 +22,10 @@ field, Cut, Copy, Paste and Select All. A long press on a link still
 shows Chrome's link menu.
 
 diff --git a/ios/web/content/BUILD.gn b/ios/web/content/BUILD.gn
-index a2eff5aae23202f334ea0ec4338288b0cb4c80e8..127a07e2adfdf93edbb2d2638a95f14fafef2ff6 100644
+index ca54cfe5aa639484f85e9108dd7a434720690879..df9d371656412443bf004adc70a38b0d391cfa4c 100644
 --- a/ios/web/content/BUILD.gn
 +++ b/ios/web/content/BUILD.gn
-@@ -110,6 +110,7 @@ source_set("ui") {
+@@ -111,6 +111,7 @@ source_set("ui") {
      "//ios/web/public",
      "//ios/web/public/ui",
    ]

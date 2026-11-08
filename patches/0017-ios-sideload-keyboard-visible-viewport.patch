@@ -25,10 +25,10 @@ focused, and typing, picking a candidate and dismissing the keyboard
 leave the page where it is.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index bf7372c76d3d12f453d0138ef59300e61c3e5b40..d7bda6332c2c17960af0f0a4d4a1b6eba13bbaca 100644
+index c78e1838cb491a81d8a20ec4dfc30d42f2c42e7a..75025997f043722213b9bf9288c1b024631e8bbe 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
-@@ -362,8 +362,9 @@ bool IsTesting() {
+@@ -363,8 +363,9 @@ bool IsTesting() {
  
  #if !BUILDFLAG(IS_IOS_TVOS)
  gfx::Size RenderWidgetHostViewIOS::GetVisibleViewportSize() {

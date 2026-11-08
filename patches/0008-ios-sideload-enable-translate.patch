@@ -38,10 +38,10 @@ page the "Translate this page?" prompt appears, and translating from
 the prompt or the menu turns the text into Chinese.
 
 diff --git a/components/translate/core/browser/translate_manager.cc b/components/translate/core/browser/translate_manager.cc
-index de791aedd35d0fb4f8a8447336425db0324cb9d2..580fb3d98c03d7fe334e1936841624e4b99d27a5 100644
+index 3597c9a3b193717f293c25da94ba4e30d4a26dca..6017cb5ceedffb076f50ce5afc03af6ec62a87e8 100644
 --- a/components/translate/core/browser/translate_manager.cc
 +++ b/components/translate/core/browser/translate_manager.cc
-@@ -755,7 +755,10 @@ LanguageState* TranslateManager::GetLanguageState() {
+@@ -776,7 +776,10 @@ LanguageState* TranslateManager::GetLanguageState() {
    return &language_state_;
  }
  
@@ -205,7 +205,7 @@ index 3fa96c90ba6f3ec8dc99bde1d4e1fbc5f8c87043..6883106f53b2c9fab0d9337b598003a0
      // chosen in `RenderFrameCreated`. This must happen even if the frame has
      // already been added to `available_frame_hosts_`, since navigation to a new
 diff --git a/ios/web/js_messaging/java_script_feature.mm b/ios/web/js_messaging/java_script_feature.mm
-index c53a109ff41d7944270f03700464f3ce70c65175..15846870865f342e0374de0b0de87c7cc001b3f1 100644
+index 00ba750c8191f4d0fdcb90601cf974351bc2ea25..3dde80bc565f7c41852e2af7ba6989e48c80ec78 100644
 --- a/ios/web/js_messaging/java_script_feature.mm
 +++ b/ios/web/js_messaging/java_script_feature.mm
 @@ -330,8 +330,12 @@ bool IsScriptEnabled(NSString* script_token) {

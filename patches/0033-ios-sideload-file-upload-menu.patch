@@ -102,10 +102,10 @@ index 3eb0c2ee6246e3b005116d86a0c477e237ad30fe..df50d730cbc5599935c58c30da5267dc
        web::BrowserState* browser_state) const override;
    web::CobaltController* GetCobaltController(
 diff --git a/ios/chrome/browser/web/model/chrome_web_client.mm b/ios/chrome/browser/web/model/chrome_web_client.mm
-index 83a56e872bc9eee23b67e42427a7d6aa1ede39a6..d91f745425a2ab43a4e2dd3995f9e017f2e35103 100644
+index 7a46bd628f3dfa0f3c6216725283fa13b330400d..5ea9e97ba49803942a1ac992c682d4d3064a3220 100644
 --- a/ios/chrome/browser/web/model/chrome_web_client.mm
 +++ b/ios/chrome/browser/web/model/chrome_web_client.mm
-@@ -689,6 +689,35 @@ bool WillHandleWebBrowserJavascriptURLs(GURL* url, web::BrowserState*) {
+@@ -694,6 +694,35 @@ bool WillHandleWebBrowserJavascriptURLs(GURL* url, web::BrowserState*) {
    tab_helper->RunOpenPanel(parameters, frame, std::move(completion));
  }
  
@@ -142,7 +142,7 @@ index 83a56e872bc9eee23b67e42427a7d6aa1ede39a6..d91f745425a2ab43a4e2dd3995f9e017
      web::BrowserState* browser_state) const {
    if (!crash_helper::common::UserEnabledUploading()) {
 diff --git a/ios/web/content/web_state/content_web_state.mm b/ios/web/content/web_state/content_web_state.mm
-index 766cb8456e902d2c5113b6f7b455a5207f7d3a60..7e09ba98844196a87b31ce2683c3809756f5eb49 100644
+index 0bb302827789fc03b2760b48ac855433154e79a0..e9c5601cbf1132518381a10e93e5a591a4436c8a 100644
 --- a/ios/web/content/web_state/content_web_state.mm
 +++ b/ios/web/content/web_state/content_web_state.mm
 @@ -8,6 +8,7 @@
@@ -161,7 +161,7 @@ index 766cb8456e902d2c5113b6f7b455a5207f7d3a60..7e09ba98844196a87b31ce2683c38097
  #import "ios/web/public/web_state_delegate.h"
  #import "ios/web/public/web_state_observer.h"
  #import "net/cert/x509_util.h"
-@@ -943,13 +945,63 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
+@@ -891,13 +893,63 @@ void SerializeMetadata(web::proto::WebStateMetadataStorage& metadata) {
        web_contents, color, suggestions);
  }
  

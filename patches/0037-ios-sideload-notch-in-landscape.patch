@@ -25,7 +25,7 @@ page's background color; portrait is unchanged. Not checked on a
 device.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_ios.mm b/content/browser/renderer_host/render_widget_host_view_ios.mm
-index def6c042b868265a0530b3db3ea47f3ca09ff332..3cab191f1dedc0755604d2453f334300d5d05002 100644
+index 6ad11676ea99737655d072f805d8a8a02844c29e..77f9497a4c980a0e35631201f4461e2aa01e7620 100644
 --- a/content/browser/renderer_host/render_widget_host_view_ios.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_ios.mm
 @@ -6,7 +6,9 @@
@@ -63,7 +63,7 @@ index def6c042b868265a0530b3db3ea47f3ca09ff332..3cab191f1dedc0755604d2453f334300
  constexpr gfx::Size KDefaultSizeForPreventResizingForTesting =
      gfx::Size(980, 735);
  
-@@ -419,6 +439,9 @@ bool IsTesting() {
+@@ -420,6 +440,9 @@ bool IsTesting() {
    // frame doesn't cover showed what is behind the view until the page drew at
    // its new size.
    ui_view_->view_.backgroundColor = skia::UIColorFromSkColor(opaque_color);
@@ -73,7 +73,7 @@ index def6c042b868265a0530b3db3ea47f3ca09ff332..3cab191f1dedc0755604d2453f334300
  }
  
  void RenderWidgetHostViewIOS::
-@@ -1016,7 +1039,15 @@ bool IsTesting() {
+@@ -1023,7 +1046,15 @@ bool IsTesting() {
    // drawn that far below the toolbar, over the scroll view's gray background.
    const CGPoint scrollOffset = [scrollView contentOffset];
    const CGRect parentBounds = [scrollView bounds];

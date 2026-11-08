@@ -10,7 +10,6 @@
 0009-ios-sideload-system-proxy.patch
 0010-ios-sideload-user-agent-ios-version.patch
 0011-ios-sideload-overscroll-touch-cancel.patch
-0012-ios-sideload-no-collapsible-browser-controls.patch
 0013-ios-sideload-downloads.patch
 0014-ios-sideload-responder-actions.patch
 0015-ios-sideload-text-edit-menu.patch
