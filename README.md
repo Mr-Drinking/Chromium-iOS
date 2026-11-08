@@ -2,7 +2,7 @@
 
 用官方 Chromium 源码编出"**Chrome iOS 原生界面 + Blink 内核**"的浏览器，侧载到没有越狱、也没有 Apple 浏览器引擎权限的 iPhone 上。目标设备：iPhone 13 mini（A15，4 GB 内存），iOS 27。
 
-> **当前状态：能用。** 模拟器和真机（iPhone 13 mini，iOS 27）上都编译、运行过，[Releases](https://github.com/Mr-Drinking/Chromium-iOS/releases) 里有未签名的 IPA（都标成了预发布，最新的是 159.0.8129.0 的测试版 5）。2026-11-08 源码升到了 159.0.8149.0，模拟器里回归过，这个版本的安装包还没发布。已知问题（发热、卡顿、没有 JIT、没有无痕模式等）和进度见 [docs/status.md](docs/status.md)。
+> **当前状态：能用，已发正式版。** 模拟器和真机（iPhone 13 mini，iOS 27）上都编译、运行过，[Releases](https://github.com/Mr-Drinking/Chromium-iOS/releases) 里有未签名的 IPA（最新的 159.0.8149.0 正式版还只在模拟器里测过）。已知问题（发热、卡顿、没有 JIT、没有无痕模式等）和进度见 [docs/status.md](docs/status.md)。
 
 ## 原理
 
