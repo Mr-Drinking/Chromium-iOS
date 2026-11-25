@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 25 Nov 2026 14:45:04 +0800
+Subject: [PATCH] iOS sideload: don't start WebKit for WKWebView settings
+
+Three things Chrome sets up at launch only matter to WKWebView, and
+each goes through WKWebViewConfigurationProvider, which starts WebKit:
+the universal opt-out setting (iOS 27), the cookie store for Chrome's
+own requests and the proxy settings of the WKWebView data store. Once
+started, WebKit's allocators and JavaScriptCore reserved some 700 MB of
+address space in the simulator (JavaScriptCore's JIT off, as on a
+device), a sizable part of what an app without extended virtual
+addressing has, and they allocate memory.
+
+With Blink no WKWebView shows pages: skip the opt-out setting and the
+proxy settings, and keep the cookie store for Chrome's own requests in
+the app's NSHTTPCookieStorage. Web pages keep their cookies in content's
+network service, as before.
+
+Status: verified in the iOS 27 simulator at 34d81e7b (159.0.8149.0):
+with breakpoints on WebKit::InitializeWebKit2(),
+WTF::initializeMainThread() and
+WKWebViewConfigurationProvider::FromBrowserState(), none was hit in the
+60 seconds after launch (before, all three were, from these three
+callers); in the clamped address space of 0039's test, the free address
+space after launch went from under 400 MB to about 1.2 GB. Rebased onto
+df27194e (160.0.8184.0), where upstream now notifies listeners once
+proxy configurations are applied to the data store; with Blink nothing
+is applied, so the only listener, the enterprise proxy controller,
+records no apply-time metrics.
+
+diff --git a/ios/web/BUILD.gn b/ios/web/BUILD.gn
+index 45960eb6a55d1dec1428e24b68acefa89dd16f8e..90f127adc140752933e95f896d7a6797ee9a9d60 100644
+--- a/ios/web/BUILD.gn
++++ b/ios/web/BUILD.gn
+@@ -36,6 +36,7 @@ source_set("web") {
+     ":resources",
+     ":threads",
+     "//base",
++    "//build:blink_buildflags",
+     "//components/leveldb_proto",
+     "//ios/third_party/webkit",
+     "//ios/web/common",
+diff --git a/ios/web/browser_state_utils.mm b/ios/web/browser_state_utils.mm
+index 14135c9603cbe1e9003db339bd99b440b92cdcd5..e20516c9345745e8a267b782b8fcaf37535ab363 100644
+--- a/ios/web/browser_state_utils.mm
++++ b/ios/web/browser_state_utils.mm
+@@ -6,6 +6,7 @@
+ 
+ #import <WebKit/WebKit.h>
+ 
++#import "build/blink_buildflags.h"
+ #import "ios/web/public/browser_state.h"
+ #import "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
+ 
+@@ -29,11 +30,18 @@ void RemoveDataStorageForIdentifier(
+ 
+ void SetUniversalOptOutEnabled(BrowserState* browser_state, bool enabled) {
+   CHECK(browser_state);
++  // [ios-blink-sideload] Universal opt-out is a WKWebView setting, and no
++  // WKWebView shows pages with Blink. Creating the configuration provider for
++  // it would start WebKit at launch, whose allocators and JavaScriptCore
++  // reserve some 700 MB of address space: a sizable part of what an app
++  // without extended virtual addressing has.
++#if !BUILDFLAG(USE_BLINK)
+   if (@available(iOS 27, *)) {
+     WKWebViewConfigurationProvider& provider =
+         WKWebViewConfigurationProvider::FromBrowserState(browser_state);
+     provider.SetUniversalOptOutEnabled(enabled);
+   }
++#endif
+ }
+ 
+ }  // namespace web
+diff --git a/ios/web/browsing_data/BUILD.gn b/ios/web/browsing_data/BUILD.gn
+index f70b47018b99111e123328e9376160f1495d55e2..57eb524c749977d1761c7385fe5a2a696effca3d 100644
+--- a/ios/web/browsing_data/BUILD.gn
++++ b/ios/web/browsing_data/BUILD.gn
+@@ -10,6 +10,7 @@ source_set("browsing_data") {
+ 
+   deps = [
+     "//base",
++    "//build:blink_buildflags",
+     "//ios/net",
+     "//ios/web/common",
+     "//ios/web/net/cookies",
+diff --git a/ios/web/browsing_data/system_cookie_store_util.mm b/ios/web/browsing_data/system_cookie_store_util.mm
+index 8075929308683fabf688882411934f0e6ce7e7a9..cfae47265125622d2b486e85cdf63803a8491eb1 100644
+--- a/ios/web/browsing_data/system_cookie_store_util.mm
++++ b/ios/web/browsing_data/system_cookie_store_util.mm
+@@ -6,6 +6,7 @@
+ 
+ #import <WebKit/WebKit.h>
+ 
++#import "build/blink_buildflags.h"
+ #import "ios/net/cookies/ns_http_system_cookie_store.h"
+ #import "ios/net/cookies/system_cookie_store.h"
+ #import "ios/web/net/cookies/wk_cookie_util.h"
+@@ -55,6 +56,17 @@ void OnWebsiteDataStoreUpdated(WKWebsiteDataStore* website_data_store) {
+ std::pair<std::unique_ptr<net::SystemCookieStore>,
+           std::unique_ptr<SystemCookieStoreHandle>>
+ CreateSystemCookieStore(BrowserState* browser_state) {
++#if BUILDFLAG(USE_BLINK)
++  // [ios-blink-sideload] With Blink, web pages keep their cookies in content's
++  // network service, and this store only serves Chrome's own requests. Keep it
++  // in the app's NSHTTPCookieStorage rather than in the WKWebView data store:
++  // creating that starts WebKit at launch, whose allocators and JavaScriptCore
++  // reserve some 700 MB of address space, a sizable part of what an app
++  // without extended virtual addressing has.
++  class BlinkSystemCookieStoreHandle : public SystemCookieStoreHandle {};
++  return std::make_pair(std::make_unique<net::NSHTTPSystemCookieStore>(),
++                        std::make_unique<BlinkSystemCookieStoreHandle>());
++#else
+   // Using WKHTTPCookieStore guarantee that cookies are always in sync and
+   // allows SystemCookieStore to handle cookies for OffTheRecord browser.
+   WKWebViewConfigurationProvider& config_provider =
+@@ -66,6 +78,7 @@ void OnWebsiteDataStoreUpdated(WKWebsiteDataStore* website_data_store) {
+   return std::make_pair(
+       std::make_unique<web::WKHTTPSystemCookieStore>(cookie_store),
+       std::move(handle));
++#endif
+ }
+ 
+ }  // namespace web
+diff --git a/ios/web/proxy/BUILD.gn b/ios/web/proxy/BUILD.gn
+index 9e66ab16fac5e484e398f99f03e359a8bf9cd7bf..32fb60aa467f4a3022e9234c218dc140df8f1e26 100644
+--- a/ios/web/proxy/BUILD.gn
++++ b/ios/web/proxy/BUILD.gn
+@@ -5,6 +5,7 @@
+ source_set("proxy") {
+   deps = [
+     "//base",
++    "//build:blink_buildflags",
+     "//ios/web/public",
+     "//ios/web/public/proxy",
+     "//ios/web/web_state/ui:wk_web_view_configuration_provider",
+diff --git a/ios/web/proxy/proxy_configuration_provider.mm b/ios/web/proxy/proxy_configuration_provider.mm
+index 9fcfe736b93cb53cd025ca60855572577c88712b..a3f848ba08af29b523ff88d3286276427a6ce06c 100644
+--- a/ios/web/proxy/proxy_configuration_provider.mm
++++ b/ios/web/proxy/proxy_configuration_provider.mm
+@@ -18,6 +18,7 @@
+ #import "base/memory/ptr_util.h"
+ #import "base/strings/string_number_conversions.h"
+ #import "base/task/thread_pool.h"
++#import "build/blink_buildflags.h"
+ #import "ios/web/public/browser_state.h"
+ #import "ios/web/public/thread/web_thread.h"
+ #import "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
+@@ -149,6 +150,12 @@
+     return;
+   }
+ 
++  // [ios-blink-sideload] These settings only reach WKWebView's traffic; Blink
++  // loads pages through Chromium's network stack. Getting the data store would
++  // start WebKit at launch, whose allocators and JavaScriptCore reserve some
++  // 700 MB of address space, a sizable part of what an app without extended
++  // virtual addressing has.
++#if !BUILDFLAG(USE_BLINK)
+   WKWebViewConfigurationProvider& config_provider =
+       WKWebViewConfigurationProvider::FromBrowserState(browser_state_);
+   WKWebsiteDataStore* data_store = config_provider.GetWebsiteDataStore();
+@@ -156,6 +163,7 @@
+     data_store.proxyConfigurations = *native_configs;
+     NotifyProxyConfigurationsApplied(request_id, [*native_configs count]);
+   }
++#endif
+ }
+ 
+ base::CallbackListSubscription
+-- 
+2.54.0 (Apple Git-157)
+

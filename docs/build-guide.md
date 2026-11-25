@@ -92,12 +92,13 @@ brew tap cameroncooke/axe && brew trust --formula cameroncooke/axe/axe && brew i
 - 测网站权限：测试页把结果用 `fetch('/log?m=…')` 发回本地服务器，服务器把它打印出来，不用截图就能读结果（补丁 0026 就是这么测的）。定位先用 `xcrun simctl location <udid> set 31.2304,121.4737` 设一个模拟位置；iOS 的系统提示（定位、粘贴）也能按文字点（`describe-ui` 里有）。模拟器没有摄像头，content 找不到设备时直接报 `NotFoundError`、不会来问权限；启动时加 `--use-fake-device-for-media-stream`（`xcrun simctl launch <udid> <bundle id> --use-fake-device-for-media-stream`）就有一个虚拟摄像头。
 - 切换深色/浅色：`xcrun simctl ui <udid> appearance dark`（或 `light`），网页开着也会立刻收到变化。
 - 模拟器里的 Chromium 走 Mac 的系统代理（补丁 0009），系统代理开着就能打开 Google；需要对照时，`xcrun simctl openurl` 打开 http(s) 网址会用模拟器里的 Safari。
+- 模拟没有扩展虚拟寻址时的地址空间（免费 Apple ID 侧载的情况）：把 `tools/vaclamp.c` 编成库注入 app，它在 app 自己的初始化之前把地址空间限制成真机上没有这项权限时的样子（6–12 GiB 是共享区，17.375 GiB 以上不能用），并记下大块 mmap 的失败和当时的布局。用法写在文件开头。要点：加 `SIMCTL_CHILD_JSC_useJIT=false`（真机上不能 JIT）；日志用 `VACLAMP_LOG` 写到 `/tmp` 下（写到外置盘的话 app 的 `open()` 会一直等系统的隐私授权）；`simctl launch --console-pty` 转发的输出有缓冲，要实时看就读 `VACLAMP_LOG`；app 崩了以后再用 `simctl openurl` 会把它不带注入地重新拉起来，看结果前先确认进程还是不是注入的那个（补丁 0039、0040、V8 0202 就是这么查和测的）。
 
 ## 4. 真机
 
 ```bash
 scripts/03-build.sh device
-scripts/05-package-ipa.sh            # → dist/Chromium-159.0.8149.0-sideload.ipa
+scripts/05-package-ipa.sh            # → dist/Chromium-160.0.8184.0-sideload.ipa
 ```
 
 产物未签名（如需让侧载工具开通 Chrome 的两个应用组，加 `--with-app-groups`，见第 6 节）。安装方式三选一：
@@ -129,7 +130,7 @@ scripts/05-package-ipa.sh            # → dist/Chromium-159.0.8149.0-sideload.i
 | 编译错误，报某个函数/常量不存在 | 补丁里的 API 在 158 改名了（已遇到过两次），对照该版本源码改补丁 |
 | 模拟器里 Chrome 界面出来了，网页区域白屏或黑屏 | 0002 的图层挂接没生效：确认 `attachContentLayer:` 被调用、视图 handle 能查到 provider |
 | 启动即崩、日志里有 GL/EGL/ANGLE 错误 | Metal 设备没拿到；看 0003 打印的 "No Metal device" 日志，可临时打 `optional/0101` 看完整报错 |
-| 启动即崩、日志里有地址空间预留失败（mmap / reserve） | 地址空间不够，参考 `docs/patch-triage.md` 的 memory 类 |
+| 启动即崩、日志里有地址空间预留失败（mmap / reserve；PartitionAlloc 的 `HandlePoolAllocFailure`、V8 的 `FatalProcessOutOfMemory`） | 多半是签名没给扩展虚拟寻址（免费 Apple ID），可用地址只到 17.375 GiB。已知的几处由 0039、0040、V8 0202 处理（验证过，见 architecture.md）；新出现的用 `tools/vaclamp.c` 在模拟器里复现（见第 3 节），再参考 `docs/patch-triage.md` 的 memory 类 |
 | 能打开网页但没法打字 | BrowserEngineKit 文本输入在无权限时不工作（status.md 第 4 条） |
 | 用一会儿被系统杀掉 | jetsam 内存上限：调低 0001 里的堆和 GPU 内存参数，少开标签页 |
 | 视频黑屏 | 原生视频层；0001 已默认关闭 `avfoundation-overlays`，若仍黑屏需移植 `ca_renderer_layer_tree.mm` 的修复 |
@@ -145,7 +146,7 @@ scripts/05-package-ipa.sh            # → dist/Chromium-159.0.8149.0-sideload.i
 
 1. 在 `~/chromium/src` 的 `ios-blink-sideload` 分支上直接改代码、编译、测试。
 2. 修改完提交到对应补丁的 commit（`git commit --fixup` 加 `git rebase -i --autosquash`，或新开一个 commit 作为新补丁）。
-3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index 34d81e7b..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变；早期手写的 0002、0003 例外，格式不同、内容等价，别替换），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。现在没有 V8 补丁（158 上用过的 `v8/0201` 在 159 上不需要了）。以后要改 V8，补丁放 `patches/v8/`，在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `0388bc74`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index 0388bc74..HEAD -o /tmp/new-v8-patches`，`series` 里写成 `src/v8:v8/02xx-….patch`。
+3. 导出：`git format-patch --zero-commit --no-numbered --no-stat --full-index df27194e..HEAD -o /tmp/new-patches`（这组选项让没改过的补丁导出后逐字节不变；早期手写的 0002、0003 例外，格式不同、内容等价，别替换），把改过的补丁覆盖到本仓库的 `patches/`（保持文件名和编号），需要时更新 `patches/series`。现在没有 V8 补丁（158 上用过的 `v8/0201` 在 159 上不需要了）。以后要改 V8，补丁放 `patches/v8/`，在 `src/v8` 的同名分支上改，基准是 `src/DEPS` 里的 `v8_revision`（现在是 `0388bc74`）：`git -C src/v8 format-patch --zero-commit --no-numbered --no-stat --full-index 0388bc74..HEAD -o /tmp/new-v8-patches`，`series` 里写成 `src/v8:v8/02xx-….patch`。
 4. 重跑 `scripts/02-apply-patches.sh` 确认能从头打上。只想核对 `patches/` 和分支是否一致时，也可以不碰工作区（重置分支会刷新补丁涉及文件的时间戳，引起不少重编）：设一个临时的 `GIT_INDEX_FILE`，`git read-tree 3313f827` 后按 `series` 依次 `git apply --cached`，再比较 `git write-tree` 和 `git rev-parse 'ios-blink-sideload^{tree}'`。
 5. 更新 `docs/status.md`，提交本仓库。
 

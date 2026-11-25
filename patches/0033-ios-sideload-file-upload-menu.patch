@@ -102,10 +102,10 @@ index 3eb0c2ee6246e3b005116d86a0c477e237ad30fe..df50d730cbc5599935c58c30da5267dc
        web::BrowserState* browser_state) const override;
    web::CobaltController* GetCobaltController(
 diff --git a/ios/chrome/browser/web/model/chrome_web_client.mm b/ios/chrome/browser/web/model/chrome_web_client.mm
-index 7a46bd628f3dfa0f3c6216725283fa13b330400d..5ea9e97ba49803942a1ac992c682d4d3064a3220 100644
+index 66316cd8ceefc58f4ec819538cfc693561c07237..ea6456fd61d4028be23fa202e1cfcf491aca324f 100644
 --- a/ios/chrome/browser/web/model/chrome_web_client.mm
 +++ b/ios/chrome/browser/web/model/chrome_web_client.mm
-@@ -694,6 +694,35 @@ bool WillHandleWebBrowserJavascriptURLs(GURL* url, web::BrowserState*) {
+@@ -701,6 +701,35 @@ bool WillHandleWebBrowserJavascriptURLs(GURL* url, web::BrowserState*) {
    tab_helper->RunOpenPanel(parameters, frame, std::move(completion));
  }
  

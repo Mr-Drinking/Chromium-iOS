@@ -81,10 +81,10 @@ index 3afebb08c2f7d488008f82c3caa44680dbb01a90..877943d421a3a87cb79243195c7ea1e2
      needs_paint_invalidation_ = true;
      color_ = new_color;
 diff --git a/third_party/blink/renderer/core/frame/local_frame_view.cc b/third_party/blink/renderer/core/frame/local_frame_view.cc
-index 3fd80748467b8ca5639000041f12bff97ccfa85c..bce41211c6a76f9ce9ae7a80c24ba42bb58ac470 100644
+index b4c4a72529c35d4ecc59de906471bdc3c9e865c3..b22c2f451bc3e0c03e3850c0323627096d31a33b 100644
 --- a/third_party/blink/renderer/core/frame/local_frame_view.cc
 +++ b/third_party/blink/renderer/core/frame/local_frame_view.cc
-@@ -5489,8 +5489,15 @@ void LocalFrameView::MapLocalToRemoteMainFrame(
+@@ -5542,8 +5542,15 @@ void LocalFrameView::MapLocalToRemoteMainFrame(
  }
  
  LayoutUnit LocalFrameView::BarCaretWidth() const {

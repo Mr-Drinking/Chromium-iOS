@@ -13,10 +13,10 @@ Status: verified at Chromium 4558926c in the iOS 27 simulator:
 google.com now serves its full page instead of the basic one.
 
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index 833293873f5e82151264c849bae2230c0b94904c..7323288923c0658d3f9c79cc86740046f4d77d01 100644
+index afd1e4c4d2a8818be87dabce8b38ac1eac865da5..af6d2b2125cf48ff6147a1ffbb119dc1a2d09b72 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
-@@ -303,10 +303,13 @@ std::string GetUnifiedPlatform() {
+@@ -306,10 +306,13 @@ std::string GetUnifiedPlatform() {
  #elif BUILDFLAG(IS_LINUX)
    return "X11; Linux x86_64";
  #elif BUILDFLAG(IS_IOS)

@@ -107,10 +107,10 @@ index 980095025eac19453dee1a881a43ad271e7bd05e..c78e1838cb491a81d8a20ec4dfc30d42
  void RenderWidgetHostViewIOS::OnOldViewDidNavigatePreCommit() {
    CHECK(browser_compositor_) << "Shouldn't be called during destruction!";
 diff --git a/gpu/ipc/service/image_transport_surface_overlay_mac.mm b/gpu/ipc/service/image_transport_surface_overlay_mac.mm
-index c02ab8e9b6d2eccac16090828a694ff08de7d7fc..3e42c66d8c446ec8c3e2559e77aa4ddb44f874f2 100644
+index f9c1e0c20adc4a365cb0072f9fa21c60e79fdb38..fa73428f68413a7fc5a0cc9dbe7dd9bbb9b6f981 100644
 --- a/gpu/ipc/service/image_transport_surface_overlay_mac.mm
 +++ b/gpu/ipc/service/image_transport_surface_overlay_mac.mm
-@@ -33,6 +33,7 @@
+@@ -34,6 +34,7 @@
  
  #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
  #include "gpu/ipc/common/ios/be_layer_hierarchy_transport.h"
@@ -118,7 +118,7 @@ index c02ab8e9b6d2eccac16090828a694ff08de7d7fc..3e42c66d8c446ec8c3e2559e77aa4ddb
  #endif
  
  #if BUILDFLAG(SKIA_USE_DAWN)
-@@ -126,22 +127,19 @@ void BufferPresented(base::WeakPtr<gpu::ImageTransportSurfaceOverlayMacEGL>
+@@ -127,22 +128,19 @@ void BufferPresented(base::WeakPtr<gpu::ImageTransportSurfaceOverlayMacEGL>
        std::move(gl_make_current_callback), GetMTLDevice(context_state));
  
  #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)

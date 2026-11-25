@@ -32,7 +32,7 @@ simulator, system-ui and -apple-system still render in SF Pro and
 ui-monospace in SF Mono.
 
 diff --git a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
-index 0d3231d3ba5be00a998f7f9c37c75c8dbb977dd8..cc00e1e2898b3073d38366d4feeecd6f3b8bd423 100644
+index 2dfcc9a61bda11fa4e4c45e68d97248887204af6..307071d183a6ba8f4ec80a3d5d7456f50c4d8fd2 100644
 --- a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
 +++ b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
 @@ -563,6 +563,14 @@ FontDescription::FamilyDescription StyleBuilderConverterBase::ConvertFontFamily(
@@ -51,10 +51,10 @@ index 0d3231d3ba5be00a998f7f9c37c75c8dbb977dd8..cc00e1e2898b3073d38366d4feeecd6f
  
      if (desc.generic_family == FontDescription::GenericFamilyType::kNoFamily) {
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index cab74e32a43477babaca1d7f99e5f81709537443..ccff811578371a35bc7cc254b59ab695dcd3cc01 100644
+index 868ee66ed2e9be8a89a91ec4c16892ebd5bb60b2..ffc5f0801237232357ae2acff06a99adb6961146 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -1780,7 +1780,13 @@ component("platform") {
+@@ -1797,7 +1797,13 @@ component("platform") {
    }
  
    if (is_ios) {
@@ -70,10 +70,10 @@ index cab74e32a43477babaca1d7f99e5f81709537443..ccff811578371a35bc7cc254b59ab695
    if (is_linux || is_chromeos) {
      sources += [
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index 36cc5f5ab5467bdeeae1405aeb0dd25c9a2cfc38..dfd17f641ccf8be7bda23d565d00f83d683afed6 100644
+index 2bc199a196762628665dc42a436e5852dbee22d6..f6a0e2207c10b26fcb1e5ef0d831c9cca8376345 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
-@@ -159,7 +159,9 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+@@ -160,7 +160,9 @@ const FontPlatformData* FontCache::GetFontPlatformData(
      AlternateFontName alternate_font_name) {
    TRACE_EVENT0("fonts", "FontCache::GetFontPlatformData");
  
@@ -85,10 +85,10 @@ index 36cc5f5ab5467bdeeae1405aeb0dd25c9a2cfc38..dfd17f641ccf8be7bda23d565d00f83d
        creation_params.Family() == font_family_names::kSystemUi) {
      return SystemFontPlatformData(font_description);
 diff --git a/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm b/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm
-index 429dd9dd628aed32999bfe7c4142e61bfffd16f0..a5370a3167b065c17b4053d3298117869c1990c2 100644
+index 21acedb5abf40f086546b74384d42db8f4b261b0..538024415db3034a86cb37b4f45534a458a7218b 100644
 --- a/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm
 +++ b/third_party/blink/renderer/platform/fonts/ios/font_cache_ios.mm
-@@ -4,11 +4,142 @@
+@@ -4,12 +4,143 @@
  
  #include "third_party/blink/renderer/platform/fonts/font_cache.h"
  
@@ -96,6 +96,7 @@ index 429dd9dd628aed32999bfe7c4142e61bfffd16f0..a5370a3167b065c17b4053d329811786
 +
 +#include <algorithm>
 +
+ #include "base/no_destructor.h"
  #include "skia/ext/font_utils.h"
 +#include "third_party/blink/renderer/platform/font_family_names.h"
 +#include "third_party/blink/renderer/platform/fonts/font_description.h"
@@ -229,8 +230,8 @@ index 429dd9dd628aed32999bfe7c4142e61bfffd16f0..a5370a3167b065c17b4053d329811786
 +}
 +
  static AtomicString& MutableSystemFontFamily() {
-   DEFINE_THREAD_SAFE_STATIC_LOCAL(AtomicString, system_font_family, ());
-   return system_font_family;
+   static base::NoDestructor<AtomicString> system_font_family;
+   return *system_font_family;
 diff --git a/third_party/blink/renderer/platform/fonts/ios/system_font_ios.h b/third_party/blink/renderer/platform/fonts/ios/system_font_ios.h
 new file mode 100644
 index 0000000000000000000000000000000000000000..32ef04d77d412f6a8687d5b8cab27373212f22bd
@@ -265,10 +266,10 @@ index 0000000000000000000000000000000000000000..32ef04d77d412f6a8687d5b8cab27373
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_IOS_SYSTEM_FONT_IOS_H_
 diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
-index 0e1e1c8e5237fb246826e3405eca5909dd8503a0..980fefcbe9683b243b8d2802b6245a2b89a10c1e 100644
+index f9f6d8bca13b2fcf50bc6887d2fc23812bcae357..c9725ad501e857b244f900f616a75ffeb787b401 100644
 --- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
 +++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
-@@ -61,6 +61,10 @@
+@@ -62,6 +62,10 @@
  #include "third_party/skia/include/core/SkStream.h"
  #include "third_party/skia/include/core/SkTypeface.h"
  
@@ -279,7 +280,7 @@ index 0e1e1c8e5237fb246826e3405eca5909dd8503a0..980fefcbe9683b243b8d2802b6245a2b
  #if BUILDFLAG(IS_MAC)
  #error This file should not be used by MacOS.
  #endif
-@@ -292,6 +296,14 @@ sk_sp<SkTypeface> FontCache::CreateTypeface(
+@@ -285,6 +289,14 @@ sk_sp<SkTypeface> FontCache::CreateTypeface(
  #endif
  
    const AtomicString& family = creation_params.Family();

@@ -47,11 +47,17 @@ the sample page otherwise); Wikipedia, GitHub and bilibili load as
 before, also right after a chrome:// page; chrome://chrome-urls shows
 only its title. Not checked on a device.
 
+Rebased onto df27194e (160.0.8184.0): upstream added a task runner
+argument to CreateWebUIURLLoaderFactoryWithoutOriginLock()
+(kPrioritizeWebUINavigationURLLoader) and replaced
+CreateAndConnectToPendingReceiver() with CreatePendingRemote(); the
+patch follows both. Not re-verified there yet.
+
 diff --git a/content/browser/loader/navigation_url_loader_impl.cc b/content/browser/loader/navigation_url_loader_impl.cc
-index b9cc368692d5880104f03642a270356af2decf34..33e7b29144687d326c67d9edd62970aa3e5a4b3b 100644
+index a5b13709ed1b5eb4267ee520fd9a0ef721c75d27..641f75e7797fd46f1cdb9e006a9d02b2872544b8 100644
 --- a/content/browser/loader/navigation_url_loader_impl.cc
 +++ b/content/browser/loader/navigation_url_loader_impl.cc
-@@ -709,14 +709,25 @@ void NavigationURLLoaderImpl::Start() {
+@@ -708,18 +708,29 @@ void NavigationURLLoaderImpl::Start() {
        CHECK(frame_tree_node);
        CHECK(frame_tree_node->navigation_request());
  
@@ -66,7 +72,11 @@ index b9cc368692d5880104f03642a270356af2decf34..33e7b29144687d326c67d9edd62970aa
 +      if (!webui_factory) {
 +        webui_factory = CreateWebUIURLLoaderFactoryWithoutOriginLock(
 +            WebUIURLLoaderFactoryPasskey::GetPassKey(),
-+            frame_tree_node->current_frame_host(), scheme, {});
++            frame_tree_node->current_frame_host(), scheme, {},
++            base::FeatureList::IsEnabled(
++                features::kPrioritizeWebUINavigationURLLoader)
++                ? GetNavigationNetworkResponseTaskRunner()
++                : nullptr);
 +      }
 +
        CreateThrottlingLoaderAndStart(
@@ -75,20 +85,24 @@ index b9cc368692d5880104f03642a270356af2decf34..33e7b29144687d326c67d9edd62970aa
                url_loader_factory::TerminalParams::ForNonNetwork(
 -                  CreateWebUIURLLoaderFactoryWithoutOriginLock(
 -                      WebUIURLLoaderFactoryPasskey::GetPassKey(),
--                      frame_tree_node->current_frame_host(), scheme, {}),
+-                      frame_tree_node->current_frame_host(), scheme, {},
+-                      base::FeatureList::IsEnabled(
+-                          features::kPrioritizeWebUINavigationURLLoader)
+-                          ? GetNavigationNetworkResponseTaskRunner()
+-                          : nullptr),
 -                  network::mojom::kBrowserProcessId),
 +                  std::move(webui_factory), network::mojom::kBrowserProcessId),
                url_loader_factory::ContentClientParams(
                    browser_context_, frame_tree_node->current_frame_host(),
                    frame_tree_node->current_frame_host()
 diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
-index e3c58ef8151c2f09f55dd11b0a43d5cffad25162..99f8465cf7727a8637eee59a545ad770acc2e592 100644
+index 0b64c1efcac9e55fa42745f6bb81cb5eba58065a..d6242dde15b650da29f28c1a1f6ac3f756d67249 100644
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
-@@ -13507,8 +13507,16 @@ void RenderFrameHostImpl::CommitNavigation(
-               subresource_loader_factories_config.ukm_source_id()),
-           devtools_instrumentation::WillCreateURLLoaderFactoryParams::ForFrame(
-               this));
+@@ -13411,8 +13411,16 @@ void RenderFrameHostImpl::CommitNavigation(
+                   subresource_loader_factories_config.ukm_source_id()),
+               devtools_instrumentation::WillCreateURLLoaderFactoryParams::
+                   ForFrame(this));
 +#if BUILDFLAG(IS_IOS)
 +      // [ios-blink-sideload] The embedder's factory replaces content's WebUI
 +      // one, the only one already there: Chrome's iOS WebUI isn't content's
@@ -103,7 +117,7 @@ index e3c58ef8151c2f09f55dd11b0a43d5cffad25162..99f8465cf7727a8637eee59a545ad770
  
      subresource_loader_factories->pending_isolated_world_factories() =
 diff --git a/ios/web/content/content_browser_context.h b/ios/web/content/content_browser_context.h
-index f9ad3df60417acf42548d36a4551dfc17cf27762..83f90d9819c8bf86be4d4e6f1f6ae41b8d5588e6 100644
+index 824ce80253b9d37bd67cc0e4c0e3b1c1f09d606e..615f25266cd9bdd381987ed2fd2d260ff70caba3 100644
 --- a/ios/web/content/content_browser_context.h
 +++ b/ios/web/content/content_browser_context.h
 @@ -38,6 +38,9 @@ class ContentBrowserContext : public content::BrowserContext {

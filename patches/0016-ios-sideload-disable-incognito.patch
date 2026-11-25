@@ -23,10 +23,10 @@ menu are disabled; the tab grid's incognito page says incognito mode is
 unavailable; regular tabs work as before.
 
 diff --git a/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm b/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm
-index 160f09ddcc32c5f4e50eda2c4976d6feb598a589..494cdf984740b8cf0fcbecbdc032075547ea7945 100644
+index dd7d0c02e2fdaa3a5eedf2f75e92fd1f31f042fa..faa372acebabc8988867d6aa24b620cece71b679 100644
 --- a/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm
 +++ b/ios/chrome/browser/menu/ui_bundled/browser_action_factory.mm
-@@ -96,11 +96,19 @@ - (UIAction*)actionToOpenInNewIncognitoTabWithBlock:(ProceduralBlock)block {
+@@ -97,11 +97,19 @@ - (UIAction*)actionToOpenInNewIncognitoTabWithBlock:(ProceduralBlock)block {
    ProceduralBlock completionBlock =
        [self recordMobileWebContextMenuOpenTabActionWithBlock:block];
  
@@ -52,10 +52,10 @@ index 160f09ddcc32c5f4e50eda2c4976d6feb598a589..494cdf984740b8cf0fcbecbdc0320755
  
  - (UIAction*)actionToOpenInNewWindowWithURL:(const GURL&)URL
 diff --git a/ios/chrome/browser/policy/model/BUILD.gn b/ios/chrome/browser/policy/model/BUILD.gn
-index 87c61140f6361d9d9cd21092f3a7711ae17ba3da..edf43e488c040f9d33deedebb02f24ce5a1a514f 100644
+index dbe26ff6126795c8d36398cdce4cc1789eeaac5a..dd5560bfc10969a734b16bf7b8610fea5dcf4b4b 100644
 --- a/ios/chrome/browser/policy/model/BUILD.gn
 +++ b/ios/chrome/browser/policy/model/BUILD.gn
-@@ -255,6 +255,7 @@ source_set("policy_util") {
+@@ -256,6 +256,7 @@ source_set("policy_util") {
    ]
    deps = [
      "//base",

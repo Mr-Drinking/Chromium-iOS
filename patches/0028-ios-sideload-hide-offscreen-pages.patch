@@ -40,7 +40,7 @@ Request Desktop Site and the location prompt work as before, also after
 a trip to the background. Not checked on a device.
 
 diff --git a/content/browser/web_contents/web_contents_view_ios.h b/content/browser/web_contents/web_contents_view_ios.h
-index 6e2ad1049585536338d4176a640bd1ba9196e837..24a45864a51ea3a0f1c85fb2d04ad581231fca6e 100644
+index c8c3afecf94d6a60f5d978f7d669a2970acbf3c6..02103a4066988a76a96f54d97d1226b67e0e21e8 100644
 --- a/content/browser/web_contents/web_contents_view_ios.h
 +++ b/content/browser/web_contents/web_contents_view_ios.h
 @@ -37,6 +37,10 @@ class WebContentsViewIOS : public WebContentsView,
@@ -55,7 +55,7 @@ index 6e2ad1049585536338d4176a640bd1ba9196e837..24a45864a51ea3a0f1c85fb2d04ad581
  
    // WebContentsView implementation --------------------------------------------
 diff --git a/content/browser/web_contents/web_contents_view_ios.mm b/content/browser/web_contents/web_contents_view_ios.mm
-index 1ba5fa37cf9e42b856ad0b3109bf0b370ef304f1..ea68df4ee80f6f3107f595b102ffc4bb8b995430 100644
+index 351668859cd95f5c1694a2b9c66727e9319ac74d..264c199856c080dd874a280d30c3ccad93c96fad 100644
 --- a/content/browser/web_contents/web_contents_view_ios.mm
 +++ b/content/browser/web_contents/web_contents_view_ios.mm
 @@ -17,6 +17,7 @@

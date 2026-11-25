@@ -36,6 +36,9 @@
 0036-ios-sideload-page-while-turning.patch
 0037-ios-sideload-notch-in-landscape.patch
 0038-ios-sideload-one-resize-per-turn.patch
+0039-ios-sideload-small-address-space.patch
+0040-ios-sideload-no-webkit-at-launch.patch
+src/v8:v8/0202-ios-sideload-smaller-pointer-tables.patch
 # Optional; applied only with --with-optional, or uncomment to make default.
 # optional/0101-gl-init-failure-without-abort.patch
 # optional/0102-disable-media-capture.patch

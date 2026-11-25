@@ -1,6 +1,6 @@
 # 结构与补丁说明
 
-以下路径都相对于 Chromium 的 `src/`。分析是在 `d586be9f`（158.0.8125.0）上做的；固定版本后来升到 `4558926c`（158.0.8127.0）。两者之间，补丁涉及的文件只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 有变化：上游新加了一个和补丁无关的 `ClearFocusedElement()`（验证过）。2026-10-29 再升到 `3313f827`（159.0.8129.0）：补丁内容都没变，只有 0023 要重新对上几行上下文：上游 2026-10-27 让竖线光标的宽度不受元素变换影响（`623986716f`），在 `caret_display_item_client.cc` 开头加了几个 include；V8 补丁 0201 上游已经修好，删掉了（见第 3 节；验证过）。2026-11-07 再升到 `34d81e7b`（159.0.8149.0）：上游 `109b373304`「[ios blink] Fix viewport sizing in both fullscreen layouts」不再把工具栏报成可收起的浏览器控件，0012 删掉了；上游 `dbd0269a80` 把键盘高度从 `FullscreenBrowserAgent::insets()` 挪到新的 `content_insets()`，0020 跟着改到那里；0005（`kCreateFontByFamily` 改名为 `FontFaceCreationType::kFamily`）、0030、0036（`IsTesting()` 换成了 `use_fixed_size_for_testing_`，`UpdateScreenInfo()` 改了写法）重新对上了上下文；编译时又碰到两处接口改动：`OpticalSizing` 改成了带作用域的枚举（0005 改用 `OpticalSizing::kAuto`），`PermissionControllerDelegate` 去掉了 `GetPermissionResultForEmbeddedRequester()`（0026 删掉了对应的实现）。模拟器里回归过键盘、转屏、刘海、滑到底、工具栏位置、网站权限，结果和升级前一样（都验证过）。
+以下路径都相对于 Chromium 的 `src/`。分析是在 `d586be9f`（158.0.8125.0）上做的；固定版本后来升到 `4558926c`（158.0.8127.0）。两者之间，补丁涉及的文件只有 `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` 有变化：上游新加了一个和补丁无关的 `ClearFocusedElement()`（验证过）。2026-10-29 再升到 `3313f827`（159.0.8129.0）：补丁内容都没变，只有 0023 要重新对上几行上下文：上游 2026-10-27 让竖线光标的宽度不受元素变换影响（`623986716f`），在 `caret_display_item_client.cc` 开头加了几个 include；V8 补丁 0201 上游已经修好，删掉了（见第 3 节；验证过）。2026-11-07 再升到 `34d81e7b`（159.0.8149.0）：上游 `109b373304`「[ios blink] Fix viewport sizing in both fullscreen layouts」不再把工具栏报成可收起的浏览器控件，0012 删掉了；上游 `dbd0269a80` 把键盘高度从 `FullscreenBrowserAgent::insets()` 挪到新的 `content_insets()`，0020 跟着改到那里；0005（`kCreateFontByFamily` 改名为 `FontFaceCreationType::kFamily`）、0030、0036（`IsTesting()` 换成了 `use_fixed_size_for_testing_`，`UpdateScreenInfo()` 改了写法）重新对上了上下文；编译时又碰到两处接口改动：`OpticalSizing` 改成了带作用域的枚举（0005 改用 `OpticalSizing::kAuto`），`PermissionControllerDelegate` 去掉了 `GetPermissionResultForEmbeddedRequester()`（0026 删掉了对应的实现）。模拟器里回归过键盘、转屏、刘海、滑到底、工具栏位置、网站权限，结果和升级前一样（都验证过）。2026-11-25 修 Issue #1 时再升到 `df27194e`（160.0.8184.0）：0005、0008、0013 只是上下文冲突；0034 跟上上游两处接口改动（`CreateWebUIURLLoaderFactoryWithoutOriginLock()` 多了任务队列参数，`CreateAndConnectToPendingReceiver()` 换成 `CreatePendingRemote()`）；上游给代理设置加了"已应用"通知，0040 跳过写入后这个通知不再发出，唯一的监听者（企业代理控制器）只拿它记 UMA 指标（都验证过）。这次没在模拟器里回归，直接编真机版给用户测。
 
 ## 1. Chrome iOS 怎么换成 Blink 内核
 
@@ -439,6 +439,35 @@ WKWebView 转屏时只给网页进程发一次最终尺寸。补丁照这个做�
 
 模拟器里验证过（2026-10-30，加临时日志）：在一个 orientationchange 和 resize 处理各卡 0.8 秒的测试页和一篇维基百科文章上，竖屏和两个方向的横屏之间来回转，网页的 widget 每次转屏只收到一次 `UpdateVisualProperties`（原来三四次，第一次是中间尺寸），处理函数各跑一次；维基百科在转屏开始后 0.4–0.6 秒按新尺寸画好。没在真机上验证。
 
+### 0039 没有扩展虚拟寻址也能启动（`base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc`、`ios_v8_cage_reservation.h`、`BUILD.gn`，`gin/v8_platform_page_allocator.cc`）
+
+GitHub Issue #1（2026-11-07）：用免费 Apple ID 侧载的 iPhone 14 Pro Max（iOS 27.0）一打开就崩，崩在 `main()` 之前，PartitionAlloc 预留内存池失败（`HandlePoolAllocFailure()`）。原因（xnu 源码 `osfmk/arm64/sptm/pmap/pmap.c`、`osfmk/mach/shared_region.h`，xnu-12377.121.6，验证过）：
+
+- 没有 `com.apple.developer.kernel.extended-virtual-addressing` 权限时，内存大于 3 GB 的设备上进程只能用 17.375 GiB 以下的地址（`ARM64_MAX_OFFSET_DEVICE_LARGE`：共享区末尾 12 GiB，加 0.5 GiB，再加 4.875 GiB），其中 6–12 GiB 是共享区；有这项权限时到 63 GiB（`MACH_VM_JUMBO_ADDRESS`）。官方 Chrome 申请了这项权限；我们的 IPA 不签名，权限看签名用的证书给不给，免费 Apple ID 给不了。用户自己的证书带这项权限，所以 13 mini 上没事。
+- PartitionAlloc 在 iOS 上把常规池和 BRP 池连成一段预留：先要 16 GiB（按 16 GiB 对齐），失败了再要 8 GiB（按 8 GiB 对齐），都放不下。
+- V8 的指针压缩要一块 4 GiB、按 4 GiB 对齐的地址（`kPtrComprCageReservationSize`），这样的地方只剩 12–16 GiB 一处。
+
+补丁：
+
+- 两次都失败时，PartitionAlloc 改用 iOS 测试进程的池大小（每个池 256 MiB；测试进程同样拿不到这项权限，上游本来就这样处理）：`IsIOSTestProcess()` 在这种情况下也返回 true。这样只改 `.cc`，不碰 `partition_address_space.h`（`raw_ptr` 引用了它，改了等于全量重编）。池放在能放下的最低处：从 4 GiB 起按对齐地址往上试，mmap 会把映射放在提示地址以上第一段空闲处。
+- 在那之前，先把一块按 4 GiB 对齐的 4 GiB 占住留给 V8（同样从低处找，真机上就是 12–16 GiB），免得被内存池或者 V8 启动前的其他映射占去。V8 预留指针压缩的地址笼时会经过 gin 的页分配器（`gin::PageAllocator::AllocatePages()`），这时把这块交给它。
+- 有这项权限的设备不受影响：第一次预留就成功，不走这条路。
+
+验证（模拟器，159.0.8149.0 上，验证过）：模拟器里的 app 其实是 macOS 进程，地址空间大得多（模拟器的 dyld 还占着 10.7–63 GiB），所以没打补丁时内存池一直放在 448 GiB 以上。用 `tools/vaclamp.c` 注入的库在 app 的初始化函数之前把 6–12 GiB 和 17.375 GiB 以上的空闲地址都占住、把 dyld 占着的 12–17.375 GiB 放出来，布局就和真机一样了：没打补丁的版本崩在 `partition_address_space.cc` 第 84 行（`HandlePoolAllocFailure()`），和 Issue 里一样；打上以后内存池在 5.0–5.5 GiB，V8 的地址笼在 12–16 GiB，app 能启动。没在真机上验证。
+- 局限（推测）：没有这项权限时两个池各只有 256 MiB，特别重的网页可能把池用满，PartitionAlloc 会因内存不够崩溃。
+
+### 0040 不为 WKWebView 的设置启动 WebKit（`ios/web/browser_state_utils.mm`、`ios/web/browsing_data/system_cookie_store_util.mm`、`ios/web/proxy/proxy_configuration_provider.mm`，各自的 `BUILD.gn`）
+
+Chrome iOS 启动时有三处为 WKWebView 准备东西，都要经过 `WKWebViewConfigurationProvider`，它一建出来就启动 WebKit（`WKContentRuleListStore`、`WKWebsiteDataStore`）：
+
+- iOS 27 上 `UniversalOptOutService` 把它的设置写给 WKWebView（`SetUniversalOptOutEnabled()`）；
+- Chrome 自己请求用的 Cookie 存储放在 WKWebView 的数据存储里（`CreateSystemCookieStore()`，请求上下文初始化时调用两次）；
+- 代理设置也写进 WKWebView 的数据存储（`OnNativeProxyConfigurationsMapped()`）。
+
+WebKit 一启动，它的分配器（bmalloc/libpas，VM 标签 53）和 JavaScriptCore（标签 63）就预留了约 700 MB 地址（模拟器里，关掉 JavaScriptCore 的 JIT 和真机一样时量的；开着 JIT 还要再加 512 MB），也要占内存。Blink 版没有 WKWebView 显示网页，这三处都用不上：前后两处直接跳过；Cookie 存储改放在 app 的 `NSHTTPCookieStorage` 里（`net::NSHTTPSystemCookieStore`），它只服务 Chrome 界面自己的请求，网页的 Cookie 在 content 的网络服务里，不受影响。
+
+验证（模拟器，验证过）：用 lldb 在 `WebKit::InitializeWebKit2()`、`WTF::initializeMainThread()` 和 `FromBrowserState()` 上下断点，启动后 60 秒内一次都没停；在上面那种受限布局里，启动后的空闲地址从不到 400 MB 涨到约 1.2 GB。不在启动路径上的 WebKit 用法没动（比如清除浏览数据仍会经过 WKWebView 的数据存储），没有扩展虚拟寻址的设备上用到这些功能时 WebKit 还是会启动。
+
 ### V8 补丁 0201：让 DrumBrake 编得过（`v8/src/wasm/interpreter/…`，159 上已删）
 
 **升到 159 后不再需要，已经删掉。** 上游 2026-10-27 自己修了下面这两处（V8 `c8b70908`「Fix build break after TrustedCast and raw() hardening」、`d1204af1`「Fix build break after SharedFunctionInfo flags move」），159 的 V8（`0388bc74`）不打补丁，DrumBrake 在模拟器和真机两种配置下都编得过，模拟器里的测试页结果正常（2026-10-29 验证过）。下面是 158 时的记录。
@@ -452,6 +481,12 @@ WKWebView 转屏时只给网页进程发一次最终尺寸。补丁照这个做�
 
 模拟器里验证过（`v8_drumbrake_bounds_checks = true` 加 `--wasm-jitless`）：自己写的测试页覆盖算术、内存、表、尾调用、异常（含 `WebAssembly.JSTag`）、GC 结构和数组、SIMD，以及两个用 clang 编成 wasm32 的 C 程序，17 项全部通过；`try_table` 模块报 `CompileError`。速度：C 写的 SHA-256 和 Mandelbrot 比 JIT（Mac 上的 Chromium）慢 4–6 倍，`fib(25)` 和免 JIT 的 JS 差不多（9 ms 对 10 ms）。
 
+
+### V8 补丁 0202：缩小指针表（`v8/include/v8-internal.h`、`v8/src/common/globals.h`）
+
+0039、0040 之后，受限布局里启动没问题，但网页一开 Web Worker 就崩：V8 给每个 isolate 预留外部指针表、同样大小的 CppHeap 指针表、共享的外部指针表和 JS 分发表，iOS 上每张 128 MB（`SegmentedTableBase::Initialize()`）。实测（模拟器，验证过）：启动后有 5 张，打开一个带 1 个 Worker 的页面变成 9 张，再开一个带 2 个 Worker 的页面变成 12 张，第 13 张预留失败，`FatalProcessOutOfMemory`；单进程下每个 Worker 都是一个新 isolate。
+
+补丁把 iOS 上的外部指针表（`kExternalPointerTableReservationSize`，CppHeap 指针表跟着它）和 JS 分发表（`kJSDispatchTableReservationSize`）都改成 32 MB，索引的移位跟着改（10、11），容量分别是 400 万条和 200 万个函数（V8 自己的低内存模式只给分发表 16 MB）。改的是 V8 的公共头文件，模拟器、真机都要全量重编。推测：每个 Worker 的预留从约 0.5 GB 降到约 0.13 GB，受限设备上能多开好几倍的 Worker。只编译过（相关文件里的 `static_assert` 都通过），还没实际跑过；要等用户用免费 Apple ID 在真机上测。
 ### 可选补丁
 
 - `optional/0101`：GL 实现为空时记录错误并返回空指针，而不是 `NOTREACHED()`/`CHECK` 直接崩溃。方便看日志。

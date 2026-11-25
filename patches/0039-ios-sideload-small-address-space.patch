@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 25 Nov 2026 14:44:28 +0800
+Subject: [PATCH] iOS sideload: start without extended virtual addressing
+
+An app sideloaded with a free Apple ID doesn't get the extended virtual
+addressing entitlement, and trapped in HandlePoolAllocFailure() before
+main() (GitHub issue #1). Without it, a process on a device with more
+than 3 GB of memory can only use addresses below 17.375 GiB
+(ARM64_MAX_OFFSET_DEVICE_LARGE in xnu), 6-12 GiB of which are the
+shared region. PartitionAlloc reserves its regular and BRP pools as one
+range, 16 GiB aligned to 16 GiB and then 8 GiB aligned to 8 GiB;
+neither fits.
+
+When both fail, take the pool size of iOS test processes (256 MiB
+each), which can't get the entitlement either, at the lowest address
+where the pools fit. Before that, set aside the 4 GiB aligned to 4 GiB
+that V8's pointer compression cage needs: 12-16 GiB is the only such
+range, and the pools or anything mapped before V8 starts could take it.
+gin's page allocator hands it to V8 when V8 reserves the cage. With the
+entitlement the first reservation succeeds as before.
+
+Only .cc files change, so as not to rebuild everything that includes
+partition_address_space.h (raw_ptr does).
+
+Status: verified in the iOS 27 simulator at 34d81e7b (159.0.8149.0),
+with tools/vaclamp.c reserving 6-12 GiB and everything above 17.375 GiB
+before the app's initializers, like a device without the entitlement:
+before, the app trapped in HandlePoolAllocFailure() as in the issue;
+with this, the pools are at 5-5.5 GiB, V8's cage at 12-16 GiB, and the
+app starts. Rebased onto df27194e (160.0.8184.0) without changes. Not
+verified on a device.
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+index c47476ec63b0292d2a1348b463c3ece421433a09..d700e00e04e659618d22a0beb9092f8630a0ddbc 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
++++ b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+@@ -485,6 +485,7 @@ if (is_clang_or_gcc) {
+       "internal_allocator.cc",
+       "internal_allocator.h",
+       "internal_allocator_forward.h",
++      "ios_v8_cage_reservation.h",
+       "linux_name_region.h",
+       "memory_reclaimer.cc",
+       "memory_reclaimer.h",
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/ios_v8_cage_reservation.h b/base/allocator/partition_allocator/src/partition_alloc/ios_v8_cage_reservation.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..ae9ea4948cc45b2a22a379e41cd73415d4a3de4f
+--- /dev/null
++++ b/base/allocator/partition_allocator/src/partition_alloc/ios_v8_cage_reservation.h
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef PARTITION_ALLOC_IOS_V8_CAGE_RESERVATION_H_
++#define PARTITION_ALLOC_IOS_V8_CAGE_RESERVATION_H_
++
++#include <cstddef>
++#include <cstdint>
++
++#include "partition_alloc/partition_alloc_base/component_export.h"
++#include "partition_alloc/partition_alloc_config.h"
++
++namespace partition_alloc {
++
++#if PA_CONFIG(DYNAMICALLY_SELECT_POOL_SIZE)
++// [ios-blink-sideload] On an iOS app whose address space is too small for the
++// normal pools (no extended virtual addressing entitlement),
++// PartitionAddressSpace::Init() sets aside the 4 GiB aligned to 4 GiB that
++// V8's pointer compression cage needs before it reserves the pools. If `size`
++// and `alignment` fit that region, returns it and hands it over: the caller
++// owns the reservation (inaccessible pages) from then on. Returns 0 otherwise,
++// or once it has been taken.
++PA_COMPONENT_EXPORT(PARTITION_ALLOC)
++uintptr_t TakeIOSRegionReservedForV8Cage(size_t size, size_t alignment);
++#endif  // PA_CONFIG(DYNAMICALLY_SELECT_POOL_SIZE)
++
++}  // namespace partition_alloc
++
++#endif  // PARTITION_ALLOC_IOS_V8_CAGE_RESERVATION_H_
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+index f91c1f7f5e47cc77e5fa10f00a615ce1034f0a54..630e99661fa4dff58ed99eedf2ef2c59a8ae9b40 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+@@ -5,6 +5,7 @@
+ #include "partition_alloc/partition_address_space.h"
+ 
+ #include <array>
++#include <atomic>
+ #include <bit>
+ #include <cstddef>
+ #include <cstdint>
+@@ -110,7 +111,53 @@ size_t PartitionAddressSpace::zero_segment_size_ = 0;
+ #endif
+ bool PartitionAddressSpace::is_core_pool_size_reduced_ = false;
+ 
++namespace {
++
++// [ios-blink-sideload] Whether the address space was too small for the pool
++// sizes above, so the pools took the test processes' size (see Init()).
++bool g_small_address_space = false;
++
++// [ios-blink-sideload] On such a process, the region set aside for V8's
++// pointer compression cage until V8 takes it (see
++// TakeIOSRegionReservedForV8Cage()). V8's kPtrComprCageReservationSize and
++// kPtrComprCageBaseAlignment are both 4 GiB.
++constexpr size_t kV8CageSize = size_t{4} * kGiB;
++std::atomic<uintptr_t> g_region_for_v8_cage{0};
++
++// [ios-blink-sideload] Reserves `size` bytes aligned to `size` (a power of
++// two), at the lowest address from 4 GiB (the end of __PAGEZERO) where they
++// fit. mmap puts a mapping at the first free range at or above its hint, so
++// each try skips what is taken.
++uintptr_t ReserveLowestAligned(size_t size) {
++  // MACH_VM_JUMBO_ADDRESS, the end of the address space with the extended
++  // virtual addressing entitlement, is 63 GiB.
++  constexpr uintptr_t kEnd = uintptr_t{64} * kGiB;
++  const PageAccessibilityConfiguration inaccessible(
++      PageAccessibilityConfiguration::kInaccessible);
++  for (uintptr_t hint = uintptr_t{4} * kGiB; hint < kEnd;) {
++    uintptr_t address = SystemAllocPages(hint, size, inaccessible,
++                                         PageTag::kPartitionAlloc, -1);
++    if (!address) {
++      return 0;
++    }
++    if (!(address & (size - 1))) {
++      return address;
++    }
++    FreePages(address, size);
++    hint = std::max(hint + size, (address + size - 1) & ~(size - 1));
++  }
++  return 0;
++}
++
++}  // namespace
++
+ bool PartitionAddressSpace::IsIOSTestProcess() {
++  // [ios-blink-sideload] Use the test processes' pool size too when the
++  // address space is just as small (see Init()).
++  if (g_small_address_space) {
++    return true;
++  }
++
+   // On iOS, only applications with the extended virtual addressing entitlement
+   // can use a large address space. Since Earl Grey test runner apps cannot get
+   // entitlements, they must use a much smaller pool size. Similarly,
+@@ -184,6 +231,23 @@ void PartitionAddressSpace::Init() {
+     setup_.regular_pool_base_address_ = map_base_pages(glued_pool_sizes);
+     // Nothing to free since we failed originally.
+   }
++  // [ios-blink-sideload] Without the extended virtual addressing entitlement
++  // (an app sideloaded with a free Apple ID), a process on a device with more
++  // than 3 GB of memory can only use addresses below 17.375 GiB
++  // (ARM64_MAX_OFFSET_DEVICE_LARGE in xnu), and 6-12 GiB belong to the shared
++  // region, so neither size above fits. Take the test processes' size instead,
++  // as low as it fits, after setting aside the 4 GiB aligned to 4 GiB that
++  // V8's pointer compression cage needs: the only such range left (12-16 GiB)
++  // could otherwise go to the pools, and V8 would fail to start.
++  if (!setup_.regular_pool_base_address_) {
++    is_core_pool_size_reduced_ = false;
++    g_small_address_space = true;
++    g_region_for_v8_cage.store(ReserveLowestAligned(kV8CageSize),
++                               std::memory_order_relaxed);
++    core_pool_size = CorePoolSize();
++    glued_pool_sizes = core_pool_size * 2;
++    setup_.regular_pool_base_address_ = ReserveLowestAligned(glued_pool_sizes);
++  }
+ #endif
+ 
+ #if PA_BUILDFLAG(IS_ANDROID)
+@@ -572,3 +636,19 @@ PageCharacteristics page_characteristics;
+ #endif  // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+ 
+ }  // namespace partition_alloc::internal
++
++#if PA_CONFIG(DYNAMICALLY_SELECT_POOL_SIZE)
++namespace partition_alloc {
++
++// [ios-blink-sideload] See ios_v8_cage_reservation.h.
++uintptr_t TakeIOSRegionReservedForV8Cage(size_t size, size_t alignment) {
++  // The region is aligned to its size, so it suits any smaller alignment.
++  if (size != internal::kV8CageSize || !std::has_single_bit(alignment) ||
++      alignment > internal::kV8CageSize) {
++    return 0;
++  }
++  return internal::g_region_for_v8_cage.exchange(0, std::memory_order_relaxed);
++}
++
++}  // namespace partition_alloc
++#endif  // PA_CONFIG(DYNAMICALLY_SELECT_POOL_SIZE)
+diff --git a/gin/v8_platform_page_allocator.cc b/gin/v8_platform_page_allocator.cc
+index 46a517bc009fe9527d78ae720263def21e9b2d23..cb033b5326d1ced28675bee5e469536144d1efa5 100644
+--- a/gin/v8_platform_page_allocator.cc
++++ b/gin/v8_platform_page_allocator.cc
+@@ -10,6 +10,7 @@
+ #include "base/memory/page_size.h"
+ #include "build/build_config.h"
+ #include "partition_alloc/address_space_randomization.h"
++#include "partition_alloc/ios_v8_cage_reservation.h"
+ #include "partition_alloc/page_allocator_constants.h"
+ #include "partition_alloc/random.h"
+ 
+@@ -86,6 +87,18 @@ void* PageAllocator::AllocatePages(void* address,
+                                    size_t length,
+                                    size_t alignment,
+                                    v8::PageAllocator::Permission permissions) {
++#if BUILDFLAG(IS_IOS)
++  // [ios-blink-sideload] When the app's address space is small (no extended
++  // virtual addressing entitlement), the only range where V8's pointer
++  // compression cage fits is the one PartitionAlloc set aside for it; take
++  // that instead of looking for one.
++  if (permissions == v8::PageAllocator::Permission::kNoAccess) {
++    if (uintptr_t region =
++            partition_alloc::TakeIOSRegionReservedForV8Cage(length, alignment)) {
++      return reinterpret_cast<void*>(region);
++    }
++  }
++#endif
+   partition_alloc::PageAccessibilityConfiguration config =
+       GetPageConfig(permissions);
+   return partition_alloc::AllocPages(address, length, alignment, config,
+-- 
+2.54.0 (Apple Git-157)
+

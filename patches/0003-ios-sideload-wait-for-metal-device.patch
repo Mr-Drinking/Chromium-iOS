@@ -15,7 +15,7 @@ Status: written against Chromium d586be9f (158.0.8125.0) without compiling;
 applies with git am --3way. Verify on a Mac before trusting it.
 
 diff --git a/content/gpu/BUILD.gn b/content/gpu/BUILD.gn
-index 15aed10aab990bb7a7590ef6d56d15c5439d3dfe..56c35464c5fbd24d60499792488e16548af7cc9b 100644
+index cf5266a796cb2c6bd9ed18bc2d78ce275eadde07..e2c2e6cee5da4b6525e0fc7ad7c7f933b2e63de3 100644
 --- a/content/gpu/BUILD.gn
 +++ b/content/gpu/BUILD.gn
 @@ -117,6 +117,15 @@ target(link_target_type, "gpu_sources") {

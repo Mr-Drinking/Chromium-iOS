@@ -109,7 +109,7 @@ index fc5fac27a1318d9a2ee07492218f6dc32f06a60e..4989569483ef4f71100b10d22c239c11
    "content_navigation_manager\\.mm": [
      "+components/embedder_support/user_agent_utils.h",
 diff --git a/ios/web/content/content_browser_context.h b/ios/web/content/content_browser_context.h
-index c0d6fd18a79d6c07918b80a4fec7d144da971bd0..f9ad3df60417acf42548d36a4551dfc17cf27762 100644
+index f085d84c0233403e7ca6d04f40178d74db0244a2..824ce80253b9d37bd67cc0e4c0e3b1c1f09d606e 100644
 --- a/ios/web/content/content_browser_context.h
 +++ b/ios/web/content/content_browser_context.h
 @@ -24,6 +24,7 @@ namespace web {
@@ -120,7 +120,7 @@ index c0d6fd18a79d6c07918b80a4fec7d144da971bd0..f9ad3df60417acf42548d36a4551dfc1
  
  // Wraps a web::BrowserState. The lifetime of instances is tied to that
  // of the corresponding ContentBrowserContext (via SharedUserData).
-@@ -76,6 +77,8 @@ class ContentBrowserContext : public content::BrowserContext {
+@@ -74,6 +75,8 @@ class ContentBrowserContext : public content::BrowserContext {
    raw_ptr<web::BrowserState> browser_state_ = nullptr;
    // [ios-blink-sideload] Hands content's downloads to Chrome's download UI.
    std::unique_ptr<ContentDownloadManagerDelegate> download_manager_delegate_;
@@ -130,7 +130,7 @@ index c0d6fd18a79d6c07918b80a4fec7d144da971bd0..f9ad3df60417acf42548d36a4551dfc1
  
  }  // namespace web
 diff --git a/ios/web/content/content_browser_context.mm b/ios/web/content/content_browser_context.mm
-index 06231782a04e0a7d7d7fe06865b968cc1a2f4655..d7e50658a04b184c8b774c41203771f426dfff7a 100644
+index 59d0098e4bc4b19eee709019bbfe105c4278d2c8..a473fedeb61f108ff0ae0eebf669e68c06e81891 100644
 --- a/ios/web/content/content_browser_context.mm
 +++ b/ios/web/content/content_browser_context.mm
 @@ -7,6 +7,7 @@

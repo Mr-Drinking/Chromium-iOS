@@ -25,10 +25,10 @@ scrolling with momentum (955 px for 416 px). Pulling down at the top
 still does nothing harmful.
 
 diff --git a/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm b/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm
-index e7fb4bd20b68e9f85bdae5a6f11aa87e4a5355f9..785d094c95e2fe2658afbf4e2d9af60623bb08be 100644
+index 3e236217f204d2a618674a2364cb9e5c8aa49892..78b8233fb85cd439c4342ef0f67dd3ac15fe824d 100644
 --- a/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm
 +++ b/ios/chrome/browser/overscroll_actions/ui_bundled/overscroll_actions_controller.mm
-@@ -698,6 +698,14 @@ - (void)setup {
+@@ -699,6 +699,14 @@ - (void)setup {
    }
    [panGesture setMaximumNumberOfTouches:1];
    [panGesture setDelegate:self];

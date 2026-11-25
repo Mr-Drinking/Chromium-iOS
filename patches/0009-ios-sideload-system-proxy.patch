@@ -19,10 +19,10 @@ the Mac's system HTTP proxy set, google.com and github.com load; before
 this change both hung, while Safari in the same simulator loaded them.
 
 diff --git a/services/network/network_context.cc b/services/network/network_context.cc
-index 15181930c2b628f0353ec096203387b34860cba0..b6ac8262bdcb8aad6d4b44877df523efc373c82d 100644
+index 8c7a731da9a5457cdcc74f1668adb1eaf7d22f2a..adaac6680bc8f83fb0ab090289fa60e96dec48e3 100644
 --- a/services/network/network_context.cc
 +++ b/services/network/network_context.cc
-@@ -113,6 +113,7 @@
+@@ -114,6 +114,7 @@
  #include "net/net_buildflags.h"
  #include "net/proxy_resolution/configured_proxy_resolution_service.h"
  #include "net/proxy_resolution/proxy_config.h"
@@ -30,7 +30,7 @@ index 15181930c2b628f0353ec096203387b34860cba0..b6ac8262bdcb8aad6d4b44877df523ef
  #include "net/shared_dictionary/shared_dictionary_isolation_key.h"
  #include "net/shared_dictionary/shared_dictionary_network_transaction_factory.h"
  #include "net/socket/delayed_client_socket_factory.h"
-@@ -3515,6 +3516,16 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
+@@ -3640,6 +3641,16 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
    SSLConfigServiceMojo* ssl_config_service_raw = ssl_config_service.get();
    builder.set_ssl_config_service(std::move(ssl_config_service));
  
@@ -47,7 +47,7 @@ index 15181930c2b628f0353ec096203387b34860cba0..b6ac8262bdcb8aad6d4b44877df523ef
    if (!params_->initial_proxy_config &&
        !params_->proxy_config_client_receiver.is_valid()) {
      params_->initial_proxy_config =
-@@ -3524,6 +3535,13 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
+@@ -3649,6 +3660,13 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
        std::move(params_->proxy_config_client_receiver),
        std::move(params_->initial_proxy_config),
        std::move(params_->proxy_config_poller_client)));

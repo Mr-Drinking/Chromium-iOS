@@ -16,16 +16,14 @@ if [ -f "$REPO_ROOT/scripts/config.local.sh" ]; then
 fi
 
 # Pinned Chromium main revision, from the official iOS Blink CI builder
-# (ios-blink-rel-fyi, build 8665782634796194769, 2026-11-07), which compiles
+# (ios-blink-rel-fyi, build 8664184888787880193, 2026-11-25), which compiles
 # "all" with use_blink=true and runs tests on an iPhone 16 / iOS 27.0
-# simulator with Xcode 27 (27a266a). It compiled. The 17 tests that failed
-# have nothing to do with the chrome app: ten components_unittests (Autofill
-# renderer tests and one Secure Payment Confirmation test), six
-# blink_platform_unittests for the Rust JPEG decoder (kRustyJpegFeature,
-# disabled by default) and one gpu_unittests test added on 2026-10-31 (mipmap
-# shared images). DEPS pins V8 a1175dcf, ANGLE 29d18232.
-CHROMIUM_REV="${CHROMIUM_REV:-34d81e7bfe669b8eccaaf35c6e14c7bfc0689703}"
-CHROMIUM_VERSION="${CHROMIUM_VERSION:-159.0.8149.0}"
+# simulator with Xcode 27 (27a266a). It compiled. The 4 tests that failed have
+# nothing to do with the chrome app: two components_unittests for Autofill's
+# date input sanitizing, one content_browsertests screenshot tracing test and
+# one gpu_unittests shared image test. DEPS pins V8 cfa3590d, ANGLE a35430f2.
+CHROMIUM_REV="${CHROMIUM_REV:-df27194e1925f9cf6375c0b4a3e42a9a66e2ba47}"
+CHROMIUM_VERSION="${CHROMIUM_VERSION:-160.0.8184.0}"
 
 # gclient root; the Chromium checkout ends up in "$CHROMIUM_DIR/src".
 # Needs roughly 150-200 GB free.

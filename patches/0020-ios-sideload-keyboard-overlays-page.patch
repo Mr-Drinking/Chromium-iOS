@@ -199,7 +199,7 @@ index 64a4a6f68907dc6f84d041ceba79d9178f8e9ba0..ba6031398ebb2b8db73ca8ad644160ec
      "//ios/chrome/browser/shared/model/browser",
      "//ios/chrome/browser/shared/public/commands",
 diff --git a/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm b/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
-index 4f8defff2fe79ad04682227d43045cd7880e26f4..5907a7eb4d78a525f6127ced790a6d9ec916277b 100644
+index 224872d94ac3d863e85a24f8b8328ce563925f16..8eba8b21c65553217abb7d25ef908d720d0381e8 100644
 --- a/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
 +++ b/ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.mm
 @@ -13,6 +13,7 @@
@@ -226,7 +226,7 @@ index 4f8defff2fe79ad04682227d43045cd7880e26f4..5907a7eb4d78a525f6127ced790a6d9e
  // Updates the fractional `progress` of the fullscreen UI layer by interpreting
  // a `scroll` distance. Evaluates the `scroll` as a percentage of the total
  // compressible space (`delta`) and clamps the result between 0.0 (fullscreen)
-@@ -382,7 +392,8 @@ constexpr FullscreenState SettledStateForTransition(
+@@ -391,7 +401,8 @@ constexpr FullscreenState SettledStateForTransition(
  
  UIEdgeInsets FullscreenBrowserAgent::content_insets() const {
    UIEdgeInsets content_insets = insets_;

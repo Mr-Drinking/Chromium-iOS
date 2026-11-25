@@ -20,7 +20,7 @@ Chromium" was, and tapping it opens
 https://github.com/Mr-Drinking/Chromium-iOS in a new tab.
 
 diff --git a/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm b/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
-index a00bffa34ff45f97ccb3c898ee565f896e07f2e0..898153f10729c954264e4b39e52cc8982798d990 100644
+index 77a1f5f741d7b1eae14f5d0991e3fb38445a0b83..39d5a8b08a0d81bc538a4c4203743441fddb8447 100644
 --- a/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
 +++ b/ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.mm
 @@ -164,6 +164,25 @@
@@ -78,7 +78,7 @@ index a00bffa34ff45f97ccb3c898ee565f896e07f2e0..898153f10729c954264e4b39e52cc898
  
    self.defaultBrowserAction =
        [self createOverflowMenuActionWithNameID:
-@@ -3166,6 +3186,16 @@ - (void)showShareSheetForChromeApp {
+@@ -3180,6 +3200,16 @@ - (void)showShareSheetForChromeApp {
    [self.activityServiceHandler showShareSheetForChromeApp];
  }
  

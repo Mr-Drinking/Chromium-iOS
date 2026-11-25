@@ -1,8 +1,8 @@
 # 补丁系列
 
-写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。2026-10-29 升到 `3313f82787695ce167d13fb795a435d3019af3f6`（159.0.8129.0）：只有 0023 冲突（上游在 `caret_display_item_client.cc` 开头加了 include），对上上下文后重新导出；0005、0016 只是行号变了，也换成了重新导出的版本；可选补丁也能打上；V8 补丁 0201 上游已经修好，删掉了（都验证过）。2026-11-07 升到 `34d81e7bfe669b8eccaaf35c6e14c7bfc0689703`（159.0.8149.0）：0012 删掉了，上游 `109b373304` 做了同样的修改（不再把工具栏报成可收起的浏览器控件）；0020 改到上游新加的 `FullscreenBrowserAgent::content_insets()` 上（上游 `dbd0269a80` 把键盘高度从 `insets()` 挪到了那里）；0005 跟着上游改了两处枚举的写法（`FontFaceCreationType::kFamily`、`OpticalSizing::kAuto`，后一处编译时才发现）；0026 删掉了 `GetPermissionResultForEmbeddedRequester()`（上游 `8d2d444db7` 随 `TOP_LEVEL_STORAGE_ACCESS` 一起从 `PermissionControllerDelegate` 里去掉了，编译时发现）；0030、0036（`UpdateScreenInfo()` 等处的 `IsTesting()` 换成了 `use_fixed_size_for_testing_`）重新对上了上下文；其余补丁内容不变，只是行号和上下文变了，都换成了在新版本上重新导出的版本（0002、0003 原来是手写的格式，内容一样）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
+写的时候基于 Chromium `d586be9f`（158.0.8125.0）。2026-10-26 固定版本升到 `4558926cce232609ce125114e633e0b3a67b793d`（158.0.8127.0）：全部补丁（含可选的）在新版本的对应文件上用 `git am --3way` 也能干净打上，没有用到 3-way 合并（验证过，在只放这些文件的临时仓库里模拟的）。2026-10-29 升到 `3313f82787695ce167d13fb795a435d3019af3f6`（159.0.8129.0）：只有 0023 冲突（上游在 `caret_display_item_client.cc` 开头加了 include），对上上下文后重新导出；0005、0016 只是行号变了，也换成了重新导出的版本；可选补丁也能打上；V8 补丁 0201 上游已经修好，删掉了（都验证过）。2026-11-07 升到 `34d81e7bfe669b8eccaaf35c6e14c7bfc0689703`（159.0.8149.0）：0012 删掉了，上游 `109b373304` 做了同样的修改（不再把工具栏报成可收起的浏览器控件）；0020 改到上游新加的 `FullscreenBrowserAgent::content_insets()` 上（上游 `dbd0269a80` 把键盘高度从 `insets()` 挪到了那里）；0005 跟着上游改了两处枚举的写法（`FontFaceCreationType::kFamily`、`OpticalSizing::kAuto`，后一处编译时才发现）；0026 删掉了 `GetPermissionResultForEmbeddedRequester()`（上游 `8d2d444db7` 随 `TOP_LEVEL_STORAGE_ACCESS` 一起从 `PermissionControllerDelegate` 里去掉了，编译时发现）；0030、0036（`UpdateScreenInfo()` 等处的 `IsTesting()` 换成了 `use_fixed_size_for_testing_`）重新对上了上下文；其余补丁内容不变，只是行号和上下文变了，都换成了在新版本上重新导出的版本（0002、0003 原来是手写的格式，内容一样）。2026-11-25 修 Issue #1 时升到 `df27194e1925f9cf6375c0b4a3e42a9a66e2ba47`（160.0.8184.0），新增 0039、0040 和 V8 补丁 `v8/0202`；四个补丁要重新对上上游的改动：0005 和上游新加的 `base/no_destructor.h` 合并 include，0008 用上游改正拼写后的变量名，0013 合并 `BUILD.gn` 的依赖，0034 跟上两处接口改动（`CreateWebUIURLLoaderFactoryWithoutOriginLock()` 多了任务队列参数，`CreateAndConnectToPendingReceiver()` 换成 `CreatePendingRemote()`）；0040 只是上下文变了；其余不变（都验证过）。`scripts/02-apply-patches.sh` 按 `series` 的顺序用 `git am --3way` 打到 `src` 的 `ios-blink-sideload` 分支上。
 
-**状态：** 2026-11-08 升到 159.0.8149.0 后，现有的 37 个补丁（0001–0011、0013–0038）在模拟器和真机两种配置下都编译通过，模拟器里回归了键盘、转屏、刘海、滑到底、工具栏、网站权限和常用功能，结果和升级前一样（验证过；各补丁的验证方法写在提交说明的 Status 里，改过的 0005、0020、0026、0030、0036 补上了在新版本上重测的结果）。159.0.8149.0 的真机包已发成正式版 Release `chromium-159.0.8149.0-sideload-1`，还没在真机上确认。以下是 159.0.8129.0 上的情况：真机上用户用过含 0001–0022 的测试版（Release 3、4、6）和含 0001–0027、0001–0028 的 159 正式版（发现桌面版不起作用、转屏后画面错乱、关闭 app 时崩溃，分别由 0024 的修正、0030、0029 处理），反馈见 [docs/status.md](../docs/status.md)；用户 2026-10-29 在真机上确认了 0024 的修正（桌面版排版）、0027 的振动和 0033（上传文件，包括拍照）；0023、0025、0026、0028–0032、0034–0038 还没在真机上确认过（0035、0036 的第一版用户 2026-10-30 在真机上试过，转屏仍然慢、刘海挡住网页，0036 改过一次，又加了 0037、0038）。
+**状态：** 2026-11-25 升到 160.0.8184.0，为 Issue #1（免费 Apple ID 侧载后启动即崩）新增 0039、0040 和 V8 补丁 0202，现在共 39 个补丁（0001–0011、0013–0040）加 1 个 V8 补丁；冲突的处理见 [docs/status.md](../docs/status.md) 的"固定版本"。这次只编了真机版：全量编译通过，没有在模拟器里回归，也还没在真机上测（0039、0040 在 159.0.8149.0 的模拟器里用受限的地址空间验证过启动，0202 只编译过）。以下是 159.0.8149.0 上的情况：2026-11-08 升到 159.0.8149.0 后，现有的 37 个补丁（0001–0011、0013–0038）在模拟器和真机两种配置下都编译通过，模拟器里回归了键盘、转屏、刘海、滑到底、工具栏、网站权限和常用功能，结果和升级前一样（验证过；各补丁的验证方法写在提交说明的 Status 里，改过的 0005、0020、0026、0030、0036 补上了在新版本上重测的结果）。159.0.8149.0 的真机包已发成正式版 Release `chromium-159.0.8149.0-sideload-1`，还没在真机上确认。以下是 159.0.8129.0 上的情况：真机上用户用过含 0001–0022 的测试版（Release 3、4、6）和含 0001–0027、0001–0028 的 159 正式版（发现桌面版不起作用、转屏后画面错乱、关闭 app 时崩溃，分别由 0024 的修正、0030、0029 处理），反馈见 [docs/status.md](../docs/status.md)；用户 2026-10-29 在真机上确认了 0024 的修正（桌面版排版）、0027 的振动和 0033（上传文件，包括拍照）；0023、0025、0026、0028–0032、0034–0038 还没在真机上确认过（0035、0036 的第一版用户 2026-10-30 在真机上试过，转屏仍然慢、刘海挡住网页，0036 改过一次，又加了 0037、0038）。
 
 | 补丁 | 改动文件 | 作用 |
 |---|---|---|
@@ -43,6 +43,9 @@
 | `0036-ios-sideload-page-while-turning.patch` | `content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.{h,mm}`、`content/browser/web_contents/web_contents_view_ios.mm` | 转屏过程中网页一直有画面，和 WKWebView 一样：视图宽度变化时用网页背景色盖住整个视图，上面是按新宽度缩放的旧画面，网页按新尺寸画好后撤掉（最多等 5 秒）。没被盖住的地方显示网页背景色，不再是浅灰色 |
 | `0037-ios-sideload-notch-in-landscape.patch` | `content/browser/renderer_host/render_widget_host_view_ios{,_uiview}.mm` | 横屏时网页不进刘海：网页视图左右避开窗口的不安全区域（和 Chrome 的内边距取较大的一边），刘海那一侧的空白显示网页背景色，和 Safari 一样 |
 | `0038-ios-sideload-one-resize-per-turn.patch` | `content/browser/renderer_host/render_widget_host_view_ios.{h,mm}` | 一次转屏只让网页重排一次：转动时视图、Chrome 的内边距、屏幕方向会接连变好几次，原来每变一次都发给网页，网页每次都重新排版、跑一遍 resize 处理；现在等它们 150 毫秒不再变化（最多 600 毫秒）再一次发出，和 WKWebView 一样 |
+| `0039-ios-sideload-small-address-space.patch` | `base/allocator/partition_allocator/src/partition_alloc/{partition_address_space.cc,ios_v8_cage_reservation.h,BUILD.gn}`、`gin/v8_platform_page_allocator.cc` | 没有扩展虚拟寻址也能启动（免费 Apple ID 侧载，Issue #1）：PartitionAlloc 两次预留都失败时退到 256 MiB 的小内存池，事先给 V8 的指针压缩留出一块按 4 GiB 对齐的 4 GiB，由 gin 交给 V8 |
+| `0040-ios-sideload-no-webkit-at-launch.patch` | `ios/web/{browser_state_utils.mm,BUILD.gn}`、`ios/web/browsing_data/{system_cookie_store_util.mm,BUILD.gn}`、`ios/web/proxy/{proxy_configuration_provider.mm,BUILD.gn}` | 启动时不再为 WKWebView 的设置拉起 WebKit（iOS 27 的 universal opt-out、Chrome 自己请求的 Cookie 存储、代理设置），省下约 700 MB 地址空间，也少占内存 |
+| `v8/0202-ios-sideload-smaller-pointer-tables.patch` | `v8/include/v8-internal.h`、`v8/src/common/globals.h` | iOS 上外部指针表（和同样大小的 CppHeap 指针表）、JS 分发表从 128 MiB 缩到 32 MiB：每个 isolate（每个 Web Worker）都要预留这几张表，没有扩展虚拟寻址时两三个 Worker 就会把地址空间用光 |
 | `optional/0101-gl-init-failure-without-abort.patch` | `ui/gl/init/gl_factory_ios.mm` | GL 不可用时记日志、返回空，而不是直接崩溃（排错用） |
 | `optional/0102-disable-media-capture.patch` | `content/browser/renderer_host/media/media_devices_manager.cc`、`media/capture/video/apple/video_capture_device_avfoundation.mm` | 不枚举/不打开摄像头和麦克风（只在 iOS 27 上也因此崩溃时才用） |
 
@@ -52,7 +55,7 @@
 
 - 代码里的改动统一加 `[ios-blink-sideload]` 注释，`git grep '\[ios-blink-sideload\]'` 能找全。
 - 改动尽量小，只放语义改动，不夹带格式化。
-- V8 等子仓库的补丁放在对应子目录，`series` 里写成 `src/v8:v8/02xx-xxx.patch`，脚本会在 `src/v8` 里按 DEPS 的版本建分支再打。导出时的基准也是 DEPS 里的版本（V8 现在是 `a1175dcf`）。现在没有子仓库补丁：158 上用过的 `v8/0201`（让 DrumBrake 编得过）在 159 上不需要了。
+- V8 等子仓库的补丁放在对应子目录，`series` 里写成 `src/v8:v8/02xx-xxx.patch`，脚本会在 `src/v8` 里按 DEPS 的版本建分支再打。导出时的基准也是 DEPS 里的版本（V8 现在是 `cfa3590d`）。现在有一个子仓库补丁：`v8/0202`（缩小指针表）；158 上用过的 `v8/0201`（让 DrumBrake 编得过）在 159 上不需要了，已删。
 
 ## 来源与许可
 
@@ -61,4 +64,4 @@
 
 ## 更新补丁
 
-见 [docs/build-guide.md 第 7 节](../docs/build-guide.md#7-修改补丁)：在 `src` 的 `ios-blink-sideload` 分支上修改并提交，再用 `git format-patch 34d81e7b..HEAD` 导出覆盖这里的文件。
+见 [docs/build-guide.md 第 7 节](../docs/build-guide.md#7-修改补丁)：在 `src` 的 `ios-blink-sideload` 分支上修改并提交，再用 `git format-patch df27194e..HEAD` 导出覆盖这里的文件（V8 补丁在 `src/v8` 里用 `cfa3590d..HEAD`）。

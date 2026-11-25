@@ -38,10 +38,10 @@ page the "Translate this page?" prompt appears, and translating from
 the prompt or the menu turns the text into Chinese.
 
 diff --git a/components/translate/core/browser/translate_manager.cc b/components/translate/core/browser/translate_manager.cc
-index 3597c9a3b193717f293c25da94ba4e30d4a26dca..6017cb5ceedffb076f50ce5afc03af6ec62a87e8 100644
+index f47d3997ad164431b342ec464077a1dc82d3648c..d446d4eabcb9a5302edacd977f9813a299151744 100644
 --- a/components/translate/core/browser/translate_manager.cc
 +++ b/components/translate/core/browser/translate_manager.cc
-@@ -776,7 +776,10 @@ LanguageState* TranslateManager::GetLanguageState() {
+@@ -818,7 +818,10 @@ LanguageState* TranslateManager::GetLanguageState() {
    return &language_state_;
  }
  
@@ -71,10 +71,10 @@ index a73a7f1c1dd9e7d55b8aa12468550ce1f063c984..0f541751f2e7f1783364711311828454
      return;
    }
 diff --git a/ios/web/content/js_messaging/content_web_frame.mm b/ios/web/content/js_messaging/content_web_frame.mm
-index e5a8246bef299bb9a92f6ed4e3068f4717f3d511..95546c2ec071fbca0aee515ec7e3b3d3bb656c10 100644
+index 949512e312d613a81af6c5f94006f5514b384636..ec15fdc8dea80c28c51f69e9abbebc4dde1f1f50 100644
 --- a/ios/web/content/js_messaging/content_web_frame.mm
 +++ b/ios/web/content/js_messaging/content_web_frame.mm
-@@ -6,6 +6,7 @@
+@@ -8,6 +8,7 @@
  
  #import "base/feature_list.h"
  #import "base/json/json_writer.h"
@@ -82,7 +82,7 @@ index e5a8246bef299bb9a92f6ed4e3068f4717f3d511..95546c2ec071fbca0aee515ec7e3b3d3
  #import "base/strings/string_util.h"
  #import "base/strings/stringprintf.h"
  #import "base/strings/utf_string_conversions.h"
-@@ -29,6 +30,19 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+@@ -31,6 +32,19 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
    std::move(web_callback).Run(&value, /*error=*/nil);
  }
  
@@ -102,23 +102,23 @@ index e5a8246bef299bb9a92f6ed4e3068f4717f3d511..95546c2ec071fbca0aee515ec7e3b3d3
  std::u16string CreateFunctionCallWithParameters(
      const std::string& name,
      const base::ListValue& parameters) {
-@@ -37,8 +51,13 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+@@ -39,8 +53,13 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
      parameter_strings[i] = base::WriteJson(parameters[i]).value_or("");
    }
-   std::string joined_paramters = base::JoinString(parameter_strings, ",");
+   std::string joined_parameters = base::JoinString(parameter_strings, ",");
 -  return base::UTF8ToUTF16(base::StringPrintf("__gCrWeb.%s(%s)", name.c_str(),
--                                              joined_paramters.c_str()));
+-                                              joined_parameters.c_str()));
 +  std::optional<std::pair<std::string_view, std::string_view>> name_parts =
 +      base::SplitStringOnce(name, '.');
 +  std::string api_name(name_parts ? name_parts->first : "");
 +  std::string function_name(name_parts ? name_parts->second : name);
 +  return base::UTF8ToUTF16(base::StringPrintf(
 +      "__gCrWeb.callFunctionInGcrWeb(\"%s\", \"%s\", [%s])",
-+      api_name.c_str(), function_name.c_str(), joined_paramters.c_str()));
++      api_name.c_str(), function_name.c_str(), joined_parameters.c_str()));
  }
  
  }  // namespace
-@@ -88,7 +107,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+@@ -90,7 +109,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
  bool ContentWebFrame::CallJavaScriptFunction(
      const std::string& name,
      const base::ListValue& parameters) {
@@ -127,7 +127,7 @@ index e5a8246bef299bb9a92f6ed4e3068f4717f3d511..95546c2ec071fbca0aee515ec7e3b3d3
      return false;
    }
    return ExecuteJavaScript(CreateFunctionCallWithParameters(name, parameters));
-@@ -99,7 +118,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+@@ -101,7 +120,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
      const base::ListValue& parameters,
      base::OnceCallback<void(const base::Value*)> callback,
      base::TimeDelta timeout) {
@@ -136,7 +136,7 @@ index e5a8246bef299bb9a92f6ed4e3068f4717f3d511..95546c2ec071fbca0aee515ec7e3b3d3
      return false;
    }
    // TODO(crbug.com/40260088): Handle timeouts.
-@@ -111,7 +130,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+@@ -113,7 +132,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
      const std::string& name,
      const base::ListValue& parameters,
      JavaScriptContentWorld* content_world) {
@@ -145,7 +145,7 @@ index e5a8246bef299bb9a92f6ed4e3068f4717f3d511..95546c2ec071fbca0aee515ec7e3b3d3
      return false;
    }
    // TODO(crbug.com/40260088): Handle injecting into an isolated world.
-@@ -124,7 +143,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
+@@ -126,7 +145,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
      JavaScriptContentWorld* content_world,
      base::OnceCallback<void(const base::Value*)> callback,
      base::TimeDelta timeout) {

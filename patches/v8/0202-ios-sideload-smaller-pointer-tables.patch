@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ios-blink-sideload <noreply@example.invalid>
+Date: Wed, 25 Nov 2026 14:45:55 +0800
+Subject: [PATCH] iOS sideload: smaller pointer tables
+
+Every isolate reserves an external pointer table, a CppHeap pointer
+table of the same size, a shared external pointer table and a
+JSDispatchTable, 128 MB each on iOS. Without the extended virtual
+addressing entitlement an app has about 7 GB of address space, and
+after V8's 4 GB pointer compression cage and PartitionAlloc's pools a
+page ran out of it at its second or third web worker.
+
+Use 32 MB for the external pointer tables (4M entries) and the
+JSDispatchTable (2M entries), with the matching index shifts.
+
+Status: compiled (the tables' static_asserts pass), not run yet.
+Measured before it in the iOS 27 simulator at Chromium 34d81e7b, in an
+address space clamped like a device's without the entitlement: 5 tables
+after launch, 9 after opening a page with one worker, 12 after another
+page with two, and the 13th failed (FatalProcessOutOfMemory).
+
+diff --git a/include/v8-internal.h b/include/v8-internal.h
+index 67f5f23053abab6e25df38126e98ae6a1752a7d0..feaadfee77a950a2e2fff524ac8811192940aaa2 100644
+--- a/include/v8-internal.h
++++ b/include/v8-internal.h
+@@ -350,8 +350,13 @@ constexpr uint32_t kExternalPointerIndexShift = 7;
+ // can configure. If we exceed this, SegmentedTable::Initialize will throw a V8
+ // out-of-memory error when running the JetStream benchmark
+ // (https://browserbench.org/JetStream/).
+-constexpr size_t kExternalPointerTableReservationSize = 128 * MB;
+-constexpr uint32_t kExternalPointerIndexShift = 8;
++// [ios-blink-sideload] 32 MB (4M entries): without the extended virtual
++// addressing entitlement an app has about 7 GB of address space, and every
++// isolate (each web worker) reserves this table, the CppHeap pointer table of
++// the same size, a shared one and a JSDispatchTable. At 128 MB that is 512 MB
++// per worker, and pages ran out of address space after two or three.
++constexpr size_t kExternalPointerTableReservationSize = 32 * MB;
++constexpr uint32_t kExternalPointerIndexShift = 10;
+ #else
+ constexpr size_t kExternalPointerTableReservationSize = 512 * MB;
+ constexpr uint32_t kExternalPointerIndexShift = 6;
+diff --git a/src/common/globals.h b/src/common/globals.h
+index 83badf8a5f52f974ee2b1cde9b3642880ec830a5..81b2a932cd7f6630b051c6c4e054d4873669ffda 100644
+--- a/src/common/globals.h
++++ b/src/common/globals.h
+@@ -674,7 +674,10 @@ constexpr int kJSDispatchTableEntrySizeLog2 = 4;
+ // isolates. However, the existing built-ins PGO profiles (generated on x64)
+ // assume the default constants, so we must use the default when built-ins PGO
+ // is enabled (crbug.com/545490388).
+-constexpr size_t kJSDispatchTableReservationSize = 128 * MB;
++// [ios-blink-sideload] 32 MB (2M entries), like the external pointer table
++// (see kExternalPointerTableReservationSize): without the extended virtual
++// addressing entitlement the address space is only about 7 GB.
++constexpr size_t kJSDispatchTableReservationSize = 32 * MB;
+ #else
+ constexpr size_t kJSDispatchTableReservationSize =
+     (V8_LOWER_LIMITS_MODE_BOOL ? 1 : 16) * kJSDispatchTableEntrySize * MB;
+@@ -687,7 +690,8 @@ constexpr size_t kMaxJSDispatchEntries =
+ #ifdef V8_TARGET_ARCH_64_BIT
+ 
+ #if defined(V8_TARGET_OS_IOS) && !defined(V8_ENABLE_BUILTINS_OPTIMIZATION)
+-constexpr uint32_t kJSDispatchHandleShift = 9;
++// [ios-blink-sideload] Matches the 32 MB kJSDispatchTableReservationSize.
++constexpr uint32_t kJSDispatchHandleShift = 11;
+ #else
+ constexpr uint32_t kJSDispatchHandleShift = V8_LOWER_LIMITS_MODE_BOOL ? 12 : 8;
+ #endif  // defined(V8_TARGET_OS_IOS) &&
+-- 
+2.54.0 (Apple Git-157)
+

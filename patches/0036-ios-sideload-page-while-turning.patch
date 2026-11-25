@@ -279,7 +279,7 @@ index aff5a86fa346563b542bba9a2acc787f1ae3eda3..1ed339d510e22deff3b5528449156051
    CHECK(_view);
    [super layoutSubviews];
 diff --git a/content/browser/web_contents/web_contents_view_ios.mm b/content/browser/web_contents/web_contents_view_ios.mm
-index ea68df4ee80f6f3107f595b102ffc4bb8b995430..82f29aa0efb92e331658ffc9ef69beed9c3b6254 100644
+index 264c199856c080dd874a280d30c3ccad93c96fad..a0adb815c6274b0bfc52bf52e6c29dd2091c1a06 100644
 --- a/content/browser/web_contents/web_contents_view_ios.mm
 +++ b/content/browser/web_contents/web_contents_view_ios.mm
 @@ -134,7 +134,12 @@ - (void)updateVisibility:(BOOL)visible {

@@ -20,10 +20,10 @@ on the left) and the page was 68 points under the bar. Not checked on a
 device.
 
 diff --git a/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm b/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm
-index 24201af6ec2324603dd1d78856c03da8dc4ce241..2317acc5deabd38a3b130f877f324327c4a66527 100644
+index 0389ea920f5b323b0acb7d7156b22a71e7ecd944..125163425d9d03db7f2baeb399fd597ae9f4a012 100644
 --- a/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm
 +++ b/ios/chrome/browser/browser_view/ui_bundled/browser_view_controller.mm
-@@ -703,6 +703,14 @@ - (void)layoutState:(SceneLayoutState*)layoutState
+@@ -708,6 +708,14 @@ - (void)layoutState:(SceneLayoutState*)layoutState
    [self updateToolbarConstraints];
    [self updateSecondaryToolbarBottomConstraint];
    [self animateTransition];
